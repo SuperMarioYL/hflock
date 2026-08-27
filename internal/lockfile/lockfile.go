@@ -1,0 +1,119 @@
+// Package lockfile defines the declarative weight lockfile that drives the
+// mirror + hash-verify pipeline, plus the hash-provenance manifest that verify
+// writes. It is the core primitive of hflock (see mvp_plan §2): no existing
+// tool combines declarative pin + multi-mirror + hash provenance.
+package lockfile
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Version is the lockfile schema version produced and accepted by this build.
+const Version = "0.1.0"
+
+// SourceHuggingFace is the only weight source supported in v0.1.
+const SourceHuggingFace = "huggingface"
+
+// WeightLock is the declarative manifest of pinned model weights. An operator
+// commits one to a repo; sync/verify read it as the source of truth.
+type WeightLock struct {
+	Version string         `yaml:"version" json:"version"`
+	Weights []PinnedWeight `yaml:"weights" json:"weights"`
+}
+
+// PinnedWeight pins one source repo at a revision and the files to mirror.
+type PinnedWeight struct {
+	Repo     string   `yaml:"repo" json:"repo"`         // "deepseek-ai/DeepSeek-V3"
+	Revision string   `yaml:"revision" json:"revision"` // git ref / commit
+	Files    []string `yaml:"files" json:"files"`       // ["*.safetensors", "config.json"]
+	Source   string   `yaml:"source" json:"source"`     // "huggingface" (only v0.1)
+}
+
+// HashManifest is the machine-checkable hash-provenance record written by
+// verify. Its entries can be checked against Hugging Face's published
+// *.sha256 or recomputed locally — the no-oracle primitive.
+type HashManifest struct {
+	LockVersion string      `json:"lock_version"`
+	GeneratedAt time.Time   `json:"generated_at"`
+	Entries     []HashEntry `json:"entries"`
+}
+
+// HashEntry is one file's provenance row: repo/revision/file + SHA256 + size +
+// the mirrors that hold a copy. Mirrors is empty in m1 (zero mirror uploads);
+// m2 sync populates it.
+type HashEntry struct {
+	Repo     string   `json:"repo"`
+	Revision string   `json:"revision"`
+	File     string   `json:"file"`
+	SHA256   string   `json:"sha256"`
+	Size     int64    `json:"size"`
+	Mirrors  []string `json:"mirrors,omitempty"` // ["gitee-ai:owner/repo", "modelscope:owner/repo"]
+}
+
+// Load reads, parses, and validates a weights.lock.yaml from path.
+func Load(path string) (*WeightLock, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read lockfile %s: %w", path, err)
+	}
+	var lock WeightLock
+	if err := yaml.Unmarshal(b, &lock); err != nil {
+		return nil, fmt.Errorf("parse lockfile %s: %w", path, err)
+	}
+	if err := lock.Validate(); err != nil {
+		return nil, err
+	}
+	return &lock, nil
+}
+
+// Validate checks the lockfile is well-formed per the v0.1 schema.
+func (l *WeightLock) Validate() error {
+	if l == nil {
+		return fmt.Errorf("lockfile: empty")
+	}
+	if l.Version == "" {
+		return fmt.Errorf("lockfile: version is required")
+	}
+	if l.Version != Version {
+		return fmt.Errorf("lockfile: unsupported version %q (want %q)", l.Version, Version)
+	}
+	if len(l.Weights) == 0 {
+		return fmt.Errorf("lockfile: at least one weight must be pinned")
+	}
+	for i, w := range l.Weights {
+		switch {
+		case w.Repo == "":
+			return fmt.Errorf("lockfile: weights[%d].repo is required", i)
+		case w.Revision == "":
+			return fmt.Errorf("lockfile: weights[%d].revision is required", i)
+		case len(w.Files) == 0:
+			return fmt.Errorf("lockfile: weights[%d].files is required (pin at least one file)", i)
+		}
+		src := w.Source
+		if src == "" {
+			src = SourceHuggingFace // default; callers treat empty as HF
+		}
+		if src != SourceHuggingFace {
+			return fmt.Errorf("lockfile: weights[%d].source %q unsupported in v0.1 (only %q)", i, src, SourceHuggingFace)
+		}
+	}
+	return nil
+}
+
+// WriteManifest serializes a HashManifest as stable, pretty JSON to outPath.
+func WriteManifest(outPath string, m *HashManifest) error {
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal manifest: %w", err)
+	}
+	b = append(b, '\n')
+	if err := os.WriteFile(outPath, b, 0o644); err != nil {
+		return fmt.Errorf("write manifest %s: %w", outPath, err)
+	}
+	return nil
+}

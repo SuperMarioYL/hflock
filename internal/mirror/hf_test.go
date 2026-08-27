@@ -1,0 +1,187 @@
+package mirror
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// newFakeHF returns an httptest server mimicking the two HF endpoints hflock
+// uses — the file-tree API and the resolve download — plus an HFSource pointed
+// at it. files maps "{repo}/resolve/{rev}/{file}" -> content.
+func newFakeHF(t *testing.T, files map[string]string) (*httptest.Server, *HFSource) {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/models/", func(w http.ResponseWriter, r *http.Request) {
+		p := strings.TrimPrefix(r.URL.Path, "/api/models/")
+		idx := strings.Index(p, "/tree/")
+		if idx < 0 {
+			http.NotFound(w, r)
+			return
+		}
+		repo := p[:idx]
+		rev := p[idx+len("/tree/"):]
+		prefix := repo + "/resolve/" + rev + "/"
+		var tree []hfTreeEntry
+		seen := map[string]bool{}
+		for k := range files {
+			if strings.HasPrefix(k, prefix) {
+				name := strings.TrimPrefix(k, prefix)
+				if !seen[name] {
+					tree = append(tree, hfTreeEntry{Type: "file", Path: name, Size: int64(len(files[k]))})
+					seen[name] = true
+				}
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("[")) // minimal hand-built JSON avoids import-order flakes
+		for i, e := range tree {
+			if i > 0 {
+				w.Write([]byte(","))
+			}
+			w.Write([]byte(`{"type":"file","path":"` + e.Path + `","size":` + itoa(e.Size) + `}`))
+		}
+		w.Write([]byte("]"))
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if content, ok := files[strings.TrimPrefix(r.URL.Path, "/")]; ok {
+			w.Header().Set("Content-Type", "application/octet-stream")
+			io.WriteString(w, content)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	src := &HFSource{Base: srv.URL, Client: srv.Client()}
+	t.Cleanup(srv.Close)
+	return srv, src
+}
+
+func itoa(n int64) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
+}
+
+func TestListFiles_ExactNoGlob(t *testing.T) {
+	_, src := newFakeHF(t, map[string]string{})
+	got, err := src.ListFiles(context.Background(), "deepseek-ai/DeepSeek-V3", "v3.0",
+		[]string{"config.json", "tokenizer.json"})
+	if err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	}
+	want := []string{"config.json", "tokenizer.json"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i, s := range got {
+		if s != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
+func TestListFiles_GlobExpansion(t *testing.T) {
+	files := map[string]string{
+		"deepseek-ai/DeepSeek-V3/resolve/v3.0/config.json":            "{}",
+		"deepseek-ai/DeepSeek-V3/resolve/v3.0/model-00001.safetensors": "AAAA",
+		"deepseek-ai/DeepSeek-V3/resolve/v3.0/model-00002.safetensors": "BBBB",
+	}
+	_, src := newFakeHF(t, files)
+	got, err := src.ListFiles(context.Background(), "deepseek-ai/DeepSeek-V3", "v3.0",
+		[]string{"*.safetensors"})
+	if err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %v, want 2 safetensors shards", got)
+	}
+	for _, g := range got {
+		if !strings.HasSuffix(g, ".safetensors") {
+			t.Fatalf("non-safetensors returned: %q", g)
+		}
+	}
+}
+
+func TestListFiles_MixedExactAndGlob(t *testing.T) {
+	files := map[string]string{
+		"deepseek-ai/DeepSeek-V3/resolve/v3.0/config.json":             "C",
+		"deepseek-ai/DeepSeek-V3/resolve/v3.0/tokenizer.json":          "T",
+		"deepseek-ai/DeepSeek-V3/resolve/v3.0/model-00001.safetensors": "S",
+	}
+	_, src := newFakeHF(t, files)
+	got, _ := src.ListFiles(context.Background(), "deepseek-ai/DeepSeek-V3", "v3.0",
+		[]string{"config.json", "*.safetensors"})
+	if got[0] != "config.json" {
+		t.Fatalf("exact must lead: %v", got)
+	}
+	if len(got) != 2 || got[1] != "model-00001.safetensors" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestDownload_OK(t *testing.T) {
+	files := map[string]string{"deepseek-ai/DeepSeek-V3/resolve/v3.0/config.json": "hello-world"}
+	_, src := newFakeHF(t, files)
+	var buf strings.Builder
+	n, err := src.Download(context.Background(), "deepseek-ai/DeepSeek-V3", "v3.0", "config.json", &buf)
+	if err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if buf.String() != "hello-world" {
+		t.Fatalf("body = %q", buf.String())
+	}
+	if n != int64(len("hello-world")) {
+		t.Fatalf("n = %d", n)
+	}
+}
+
+func TestDownload_404(t *testing.T) {
+	_, src := newFakeHF(t, map[string]string{})
+	var buf strings.Builder
+	_, err := src.Download(context.Background(), "deepseek-ai/DeepSeek-V3", "v3.0", "nope.json", &buf)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+		t.Fatalf("err = %v, want HTTP 404", err)
+	}
+}
+
+func TestGiteeTarget_MetadataAndM2Stub(t *testing.T) {
+	g := &GiteeTarget{}
+	if g.Name() != "gitee-ai" {
+		t.Fatalf("name = %q", g.Name())
+	}
+	if g.MirrorID("deepseek-ai/DeepSeek-V3") != "gitee-ai:deepseek-ai/DeepSeek-V3" {
+		t.Fatalf("mirrorid = %q", g.MirrorID("deepseek-ai/DeepSeek-V3"))
+	}
+	if g.RepoURL("deepseek-ai/DeepSeek-V3") != DefaultGiteeBase+"/deepseek-ai/DeepSeek-V3" {
+		t.Fatalf("repo url = %q", g.RepoURL("deepseek-ai/DeepSeek-V3"))
+	}
+	if err := g.Upload(context.Background(), "", "", "", ""); !errors.Is(err, ErrMirrorNotImplemented) {
+		t.Fatalf("upload err = %v, want ErrMirrorNotImplemented", err)
+	}
+}
+
+func TestModelScopeTarget_MetadataAndM2Stub(t *testing.T) {
+	m := &ModelScopeTarget{}
+	if m.Name() != "modelscope" {
+		t.Fatalf("name = %q", m.Name())
+	}
+	if m.RepoURL("deepseek-ai/DeepSeek-V3") != DefaultModelScopeBase+"/models/deepseek-ai/DeepSeek-V3" {
+		t.Fatalf("repo url = %q", m.RepoURL("deepseek-ai/DeepSeek-V3"))
+	}
+	if err := m.Upload(context.Background(), "", "", "", ""); !errors.Is(err, ErrMirrorNotImplemented) {
+		t.Fatalf("upload err = %v, want ErrMirrorNotImplemented", err)
+	}
+}

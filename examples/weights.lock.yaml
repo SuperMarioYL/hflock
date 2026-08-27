@@ -1,0 +1,27 @@
+# Example weights lockfile for hflock.
+#
+# Pin the 国产 model weights your CI depends on, then run:
+#   hflock verify examples/weights.lock.yaml
+# to download each file from Hugging Face, hash it, and write
+# weights.lock.manifest.json — a machine-checkable provenance record.
+#
+# Tip: instead of listing every shard, pin all of them with a glob:
+#     files: ["*.safetensors", "config.json"]
+# Glob patterns expand via the Hugging Face file-tree API at verify time
+# (see README "用法" / Usage). This example pins the small metadata files so
+# the offline demo fixture can mirror it byte-for-byte.
+
+version: "0.1.0"
+weights:
+  - repo: deepseek-ai/DeepSeek-V3
+    revision: v3.0
+    files: ["config.json", "generation_config.json", "tokenizer.json"]
+    source: huggingface
+  - repo: Qwen/Qwen3-235B-A22B
+    revision: main
+    files: ["config.json", "generation_config.json", "tokenizer.json"]
+    source: huggingface
+  - repo: THUDM/glm-4-9b-chat
+    revision: main
+    files: ["config.json", "generation_config.json", "tokenizer.json"]
+    source: huggingface

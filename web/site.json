@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "name": "hflock",
+  "github": "https://github.com/SuperMarioYL/hflock",
+  "host": "hflock.lei6393.com",
+  "lang": { "primary": "zh", "toggle": true },
+  "accent": ["#7c6ff0", "#4d9bff", "#34e5d0"],
+  "hero": {
+    "eyebrow": { "zh": "本地 · 无账号 · 哈希溯源", "en": "Local · No Account · Hash-Verified" },
+    "headline": { "zh": "一条命令锁定国产模型权重\n镜像到 Gitee/ModelScope 并校验", "en": "Pin CN model weights in one command\nMirror to Gitee/ModelScope with hash proof" },
+    "sub": { "zh": "把 DeepSeek/Qwen/GLM 权重从 Hugging Face 声明式锁定、镜像到国产平台、并逐文件校验 SHA256 — 不再依赖单一来源。", "en": "Declaratively pin DeepSeek/Qwen/GLM weights from Hugging Face, mirror to CN platforms, and verify SHA256 per file — no single-source dependency." },
+    "command": "hflock verify weights.lock.yaml",
+    "cta": { "zh": "查看 GitHub", "en": "View on GitHub" },
+    "ctaGithub": { "zh": "安装", "en": "Install" },
+    "scroll": { "zh": "为什么需要", "en": "Why you need it" }
+  },
+  "advantages": [
+    {
+      "title": { "zh": "声明式锁定，不是手动下载", "en": "Declarative lock, not manual download" },
+      "body": { "zh": "在 weights.lock.yaml 里写明模型名和文件，一条命令解析、下载、校验 — 像包管理器锁定依赖一样锁定权重。", "en": "List models and files in weights.lock.yaml; one command parses, downloads, and verifies — pinning weights like a package manager pins dependencies." },
+      "chips": ["› weights.lock.yaml", "› glob 支持", "› SHA256 逐文件校验"]
+    },
+    {
+      "title": { "zh": "镜像到国产平台，不再依赖单一来源", "en": "Mirror to CN platforms, no single-source dependency" },
+      "body": { "zh": "NVIDIA 收购 Hugging Face 后，权重来源的稳定性存疑。hflock 把权重镜像到 Gitee AI 和 ModelScope，哈希可追溯。", "en": "After NVIDIA acquired Hugging Face, weight source stability is uncertain. hflock mirrors to Gitee AI and ModelScope with traceable hashes." },
+      "chips": ["› Gitee AI", "› ModelScope", "› 哈希溯源"]
+    },
+    {
+      "title": { "zh": "CI/air-gap 友好，单二进制", "en": "CI/air-gap friendly, single binary" },
+      "body": { "zh": "Go 编译的单二进制，放进 CI pipeline 或离线环境即可使用 — 不需要 Python 运行时，不需要账号。", "en": "A single Go binary that drops into CI pipelines or air-gapped environments — no Python runtime, no account required." },
+      "chips": ["› go install", "› 零依赖运行", "› CI 集成"]
+    }
+  ],
+  "scene": { "kind": "hub-nodes", "nodes": ["Hugging Face", "Gitee AI", "ModelScope", "weights.lock.yaml", "SHA256"] },
+  "cta": {
+    "headline": { "zh": "开始锁定你的模型权重", "en": "Start pinning your model weights" },
+    "sub": { "zh": "MIT 开源 · 一条命令安装", "en": "MIT open source · one command install" },
+    "button": { "zh": "go install", "en": "go install" }
+  },
+  "footer": { "tag": { "zh": "MIT © 2026 SuperMarioYL", "en": "MIT © 2026 SuperMarioYL" } }
+}

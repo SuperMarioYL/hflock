@@ -1,0 +1,78 @@
+{
+  "name": "hflock",
+  "tagline": "Give downloaded model files a checkable manifest.",
+  "architecture": {
+    "title": "How hflock works",
+    "nodes": [
+      {
+        "title": "YAML lockfile",
+        "detail": "internal/lockfile"
+      },
+      {
+        "title": "HF source",
+        "detail": "internal/mirror/hf.go"
+      },
+      {
+        "title": "Download + SHA256",
+        "detail": "internal/verify/verify.go"
+      },
+      {
+        "title": "JSON manifest",
+        "detail": "Hash entries and sizes"
+      }
+    ],
+    "edges": [
+      [
+        0,
+        1
+      ],
+      [
+        1,
+        2
+      ],
+      [
+        2,
+        3
+      ]
+    ]
+  },
+  "process": {
+    "title": "From input to a useful result",
+    "steps": [
+      {
+        "title": "Read lockfile",
+        "detail": "Three fixture repositories"
+      },
+      {
+        "title": "Download locally",
+        "detail": "Nine metadata files"
+      },
+      {
+        "title": "Hash and record",
+        "detail": "Size and SHA256 per file"
+      }
+    ],
+    "result": "Nine fixture files produce nine SHA256 entries; no mirror upload is attempted."
+  },
+  "integrations": {
+    "title": "Supported input and output routes",
+    "items": [
+      {
+        "title": "YAML",
+        "detail": "Repository/revision/file selection"
+      },
+      {
+        "title": "Hugging Face HTTP",
+        "detail": "Download source"
+      },
+      {
+        "title": "Loopback fixture",
+        "detail": "Offline reproduction"
+      },
+      {
+        "title": "JSON manifest",
+        "detail": "SHA256 and byte counts"
+      }
+    ]
+  }
+}

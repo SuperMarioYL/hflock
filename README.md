@@ -1,150 +1,131 @@
-<div align="right"><sub>[English](./README.en.md)&nbsp;&nbsp;⇄&nbsp;&nbsp;<b>简体中文</b></sub></div>
+[English](./README.en.md) · [Website](https://hflock.lei6393.com) · [GitHub](https://github.com/SuperMarioYL/hflock)
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./assets/hero-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="./assets/hero-light.svg">
-  <img src="./assets/hero-light.svg" width="880" alt="hflock">
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="./assets/presentation/hero-mobile-dark.svg">
+  <source media="(max-width: 600px)" srcset="./assets/presentation/hero-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/presentation/hero-dark.svg">
+  <img src="./assets/presentation/hero-light.svg" width="960" alt="Hero diagram">
 </picture>
 
-<p align="center"><sub>国产模型权重镜像与哈希溯源 CLI —— 把 DeepSeek/Qwen/GLM 权重从 Hugging Face 镜像到 Gitee AI/ModelScope，并生成可机器校验的 SHA256 溯源清单。</sub></p>
+# hflock
 
-<p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license"></a>
-  <a href="https://github.com/SuperMarioYL/hflock/releases"><img src="https://img.shields.io/github/v/release/SuperMarioYL/hflock?label=release" alt="release"></a>
-  <img src="https://img.shields.io/github/actions/workflow/status/SuperMarioYL/hflock/ci.yml?branch=main&label=CI" alt="CI">
-  <img src="https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white" alt="Go">
-</p>
+**为下载的模型文件生成可检查的清单。**
 
-<p align="center"><b>CI 每次拉 DeepSeek 权重都在赌 GFW 与 Hugging Face 不出事 —— hflock 用一个锁文件把权重的镜像、哈希、可重建性钉死在 Git 里。</b></p>
+hflock 读取 YAML 中的仓库、版本和文件列表，下载文件，再生成包含哈希与大小的 JSON 清单。
 
-<h2><img src="https://api.iconify.design/tabler:topology-star-3.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> 架构</h2>
+## 为什么需要它
+
+如果没有记录版本和实际字节，模型下载很难复现。把需要的文件写入锁文件，再将哈希清单与构建一起保存。
+
+- **声明输入** — 把仓库、版本和文件名保存在 YAML 中。
+- **记录实际字节** — 每次下载生成 SHA256 摘要与字节数。
+- **离线复现** — 随仓 HTTP fixture 可运行下载与哈希计算链路。
+
+## 架构
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./assets/atlas-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="./assets/atlas-light.svg">
-  <img src="./assets/atlas-light.svg" width="880" alt="架构：lockfile → verify（HF 下载 + SHA256）→ manifest；m2 镜像目标待接入">
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="./assets/presentation/architecture-mobile-dark.svg">
+  <source media="(max-width: 600px)" srcset="./assets/presentation/architecture-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/presentation/architecture-dark.svg">
+  <img src="./assets/presentation/architecture-light.svg" width="960" alt="Architecture diagram">
 </picture>
 
-<p>v0.1（m1）只打通蓝色与紫色这一段：<b>锁文件 → 从 Hugging Face 下载 → 重算 SHA256 → 输出 <code>weights.lock.manifest.json</code></b>。绿色清单就是给 CI 气隙门禁可校验的溯源记录。m2 才把权重镜像到 Gitee AI + ModelScope（图中虚线节点）。</p>
+锁文件加载器校验请求；Hugging Face 源解析文件名或 glob，将下载流同时写入本地缓存并计算 SHA256。验证器把仓库、版本、路径、大小和摘要写入清单；它不会自动将摘要与可信基线比较。
 
-## 目录
+| 组件 | 职责 |
+| --- | --- |
+| `YAML lockfile` | internal/lockfile |
+| `HF source` | internal/mirror/hf.go |
+| `Download + SHA256` | internal/verify/verify.go |
+| `JSON manifest` | Hash entries and sizes |
 
-- [为什么是 hflock](#为什么是-hflock)
-- [安装与快速开始](#安装与快速开始)
-- [用法](#用法)
-- [演示](#演示)
-- [配置](#配置)
-- [对比](#对比)
-- [路线图](#路线图)
-- [付费 · Hosted tier](#付费--hosted-tier)
-- [许可证](#许可证)
+## 安装与快速上手
 
-## 为什么是 hflock
-
-国内 AI/DevOps 工程师把生产构建钉在 DeepSeek、Qwen、GLM 权重上，权威源只有一个 Hugging Face —— 在 GFW 内要么走一个**没有 SLA、没有溯源**的反向代理（hf-mirror.com），要么用 ModelScope 镜像一个**滞后且不完整**的子集。两条路都没法向审计或 CI 证明「这些字节是对的、且可重建」。
-
-hflock 把这件事变成一个声明式锁文件：你提交 <code>weights.lock.yaml</code> 钉住 repo@revision + 文件，<code>hflock verify</code> 从 Hugging Face 下载、重算 SHA256、写出可机器校验的清单。在没有镜像之前，溯源链就已经可查 —— 这正是 m1 要先打通的原因。
-
-<h2><img src="https://api.iconify.design/tabler:rocket.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> 安装与快速开始</h2>
-
-单二进制，无 Python 运行时。冷克隆到第一个可见结果，三条命令，离线（用内置 fixture 模拟 Hugging Face）：
+使用仓库清单指定的运行时版本构建，并在仓库根目录运行示例。
 
 ```bash
-git clone https://github.com/SuperMarioYL/hflock && cd hflock
-go build -o hflock ./cmd/hflock
-python3 -m http.server 8053 --directory examples/fixture & \
-  HFLOCK_HF_BASE=http://localhost:8053 ./hflock verify examples/weights.lock.yaml
+git clone https://github.com/SuperMarioYL/hflock.git
+cd hflock
+go build ./cmd/hflock
 ```
 
-<details><summary>示例输出（weights.lock.manifest.json）</summary>
-
-```json
-{
-  "lock_version": "0.1.0",
-  "generated_at": "2026-08-27T16:36:17Z",
-  "entries": [
-    { "repo": "deepseek-ai/DeepSeek-V3", "revision": "v3.0", "file": "config.json", "sha256": "b6c28b2f…", "size": 146 },
-    { "repo": "Qwen/Qwen3-235B-A22B", "revision": "main", "file": "tokenizer.json", "sha256": "8a9ebf95…", "size": 118 }
-  ]
-}
-```
-</details>
-
-> 对真实 Hugging Face 跑（下载真权重大文件）：`go install github.com/SuperMarioYL/hflock@latest`，去掉 `HFLOCK_HF_BASE`，直接 `hflock verify weights.lock.yaml`。
-
-<h2><img src="https://api.iconify.design/tabler:terminal-2.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> 用法</h2>
-
-写一个 `weights.lock.yaml` 钉住你 CI 依赖的国产权重：
-
-```yaml
-version: "0.1.0"
-weights:
-  - repo: deepseek-ai/DeepSeek-V3
-    revision: v3.0
-    files: ["config.json", "*.safetensors"]   # glob 会在校验时经 HF 文件树 API 展开
-    source: huggingface
-```
-
-校验并生成溯源清单（m1 核心）：
+Python 示例在 loopback 提供 examples/fixture，运行真实 verify 命令并打印生成的哈希；退出时停止服务并删除自身临时缓存。
 
 ```bash
-hflock verify weights.lock.yaml                       # → weights.lock.manifest.json
-hflock verify weights.lock.yaml -m ci/manifest.json   # 指定输出路径
-hflock verify weights.lock.yaml --progress            # 大文件显示进度条
+python3 examples/presentation-demo.py
 ```
 
-CI 气隙门禁：把清单提交进仓库，下次 `hflock verify` 重算哈希与清单比对即可判成败（m3 的 `--check` 会给标准退出码）。
+## 实际运行示例
 
-完整示例见 [`examples/weights.lock.yaml`](./examples/weights.lock.yaml)。
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="./assets/presentation/process-mobile-dark.svg">
+  <source media="(max-width: 600px)" srcset="./assets/presentation/process-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/presentation/process-dark.svg">
+  <img src="./assets/presentation/process-light.svg" width="960" alt="Process diagram">
+</picture>
 
-<h2><img src="https://api.iconify.design/tabler:photo.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> 演示</h2>
+Nine fixture files produce nine SHA256 entries; no mirror upload is attempted.
 
-<p>离线 fixture 下，从锁文件到 SHA256 溯源清单的完整流程：</p>
+```text
+source: local fixture; uploaded files: 0
+deepseek-ai/DeepSeek-V3 config.json 146 b6c28b2ff63b535e4c3f1bac57c7da944ca8c098fbfab51befbd67d8b1ce59c7
+deepseek-ai/DeepSeek-V3 generation_config.json 72 6d9c0a68128352b855b24b93d26cc6cb682de94fbe3bd5476cc548d76fbde572
+deepseek-ai/DeepSeek-V3 tokenizer.json 121 2d162ff88f4721aaab432337fe7684c99b524f7b9ed12a96bac105471a8cdec0
+Qwen/Qwen3-235B-A22B config.json 136 477797cbaa2e203b12b887f4dd0d50837f1083fb8c96614c60dc0a68e341ba51
+Qwen/Qwen3-235B-A22B generation_config.json 72 6bdf409035dea3029e9f60144e1456598aa47d837381c524b441708ccafcb798
+Qwen/Qwen3-235B-A22B tokenizer.json 118 8a9ebf95154a697efaf420257b2b31d198c8e81b840012f2aa170b38c6771677
+THUDM/glm-4-9b-chat config.json 133 1227daa941278aa954f4e005cb4eed01af781ed2af76e539021fabb2faf34129
+THUDM/glm-4-9b-chat generation_config.json 72 e06ed109d9bfa5faf7f3fedc0cc895d1fde272744ec9df0ccb13286fb28ce8ab
+THUDM/glm-4-9b-chat tokenizer.json 117 35f88f9c371cb02c189d4f02a433629e028fc0f4f18f7d420ead0fef653edd2e
+hashed files: 9
+```
 
-<p align="center"><img src="./assets/demo.gif" width="720" alt="hflock demo"></p>
+完整命令与输出保存在 [docs/demo-results.json](./docs/demo-results.json). 输入和复现代码均随仓提供。
 
-<p align="center"><sub>完整终端录制：<a href="./assets/demo.cast">asciinema cast</a> · 脚本：<a href="./docs/demo.tape">docs/demo.tape</a></sub></p>
+![已有终端录制](./assets/demo.gif)
 
-<h2><img src="https://api.iconify.design/tabler:adjustments.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> 配置</h2>
+保留已有录制供参考；上方文字示例给出当前可复现的操作。
 
-| 配置项 | 类型 | 默认 | 说明 |
-| --- | --- | --- | --- |
-| `--hf-base` / `HFLOCK_HF_BASE` | string | `https://huggingface.co` | Hugging Face 源地址；离线 fixture / 自建镜像可覆盖 |
-| `--workdir` / `HFLOCK_WORKDIR` | path | 系统 temp | 下载缓存目录 |
-| `--manifest` / `-m` | path | `weights.lock.manifest.json` | 清单输出路径 |
-| `--progress` | bool | `false` | 显示每文件下载进度条 |
+## 用法
 
-## 对比
+CLI 提供以下操作。示例之外的命令需要替换成你的文件路径或标识。
 
-| 维度 | hflock | hf-mirror.com | ModelScope | huggingface-cli |
-| --- | :---: | :---: | :---: | :---: |
-| 声明式 pin（锁文件入 Git） | ✓ | ✗ | ✗ | ✗ |
-| 多镜像（Gitee + ModelScope 并发） | ✓ (m2) | ✗（单反代） | ✗（单平台） | ✗ |
-| 哈希溯源清单（CI 可校验） | ✓ | ✗ | ✗ | 部分（需手写 sha256sum） |
-| 托管稳定性 / SLA | ✗（OSS 自托管） | ✗（社区代理） | ✓（阿里托管） | — |
-| 零配置即用 | ✗（需写锁文件） | ✓ | ✓ | ✓ |
+```bash
+go run ./cmd/hflock verify examples/weights.lock.yaml --manifest weights.lock.manifest.json
+# Use your own lockfile for actual downloads:
+hflock verify weights.lock.yaml --progress
+```
 
-诚实说：要 SLA 与零配置，ModelScope / hf-mirror 现在就更好；hflock 卖点是**声明式 pin + 可校验溯源**这一块没人做。
+## 配置
 
-<h2><img src="https://api.iconify.design/tabler:map-2.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> 路线图</h2>
+--hf-base 或 HFLOCK_HF_BASE 指定 HTTP 源；--workdir 或 HFLOCK_WORKDIR 指定下载缓存；--manifest/-m 指定输出文件；--progress 显示进度。示例启动 loopback fixture 服务并使用临时缓存。
 
-- [x] **m1 — 锁文件 + 哈希校验**：`WeightLock` 解析校验 + SHA256 验证，`hflock verify` 产出溯源清单（本版本）
-- [ ] **m2 — 镜像同步**：`hflock sync` 读锁文件，从 Hugging Face 下载，并发上传到 Gitee AI + ModelScope，再跑 verify
-- [ ] **m3 — init + CI 门禁**：`hflock init` 由 HF repo 生成锁文件；`hflock list` 逐权重状态表；`--check` 退出码做 CI 气隙门禁；完整 demo tape
-- [ ] 未来：增量同步、sigstore 签名溯源、百度网盘/阿里云 OSS 镜像
+## 集成与职责分工
 
-## 付费 · Hosted tier
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="./assets/presentation/integrations-mobile-dark.svg">
+  <source media="(max-width: 600px)" srcset="./assets/presentation/integrations-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/presentation/integrations-dark.svg">
+  <img src="./assets/presentation/integrations-light.svg" width="960" alt="Integrations diagram">
+</picture>
 
-v0.1 只发 OSS 引擎（MIT），不卖任何东西。但商业路径是真实的，记在这里免得你问：
+以下路径已有源码实现。按任务选择输入，并把生成的结果与项目一起保存。
 
-- **谁会付费**：受监管行业（金融/政务）的 CN ML 平台与合规岗，需要一份审计员能接受的「数据不出境」证明报告。
-- **买什么**：托管镜像 + SLA + 签名（sigstore）溯源报告 —— 即 v0.1 OSS 引擎验证过的那套，叠加运营层。
-- **价位区间**：约 ¥3k–8k/月/团队（低于一名 SRE 自托管的成本）。
-- **最小闭环**：OSS CLI 在合规团队落地 → v0.2 在阿里云（ECS + OSS 存权重）开托管层 + 计费 → 每个 pinned 权重组一份签名溯源 PDF。
-- **诚实门槛**：v0.1 达到 day-30 指标（≥100 star、≥10 活跃用户）前，不开付费层 —— 没有开源引流的商业层只是一张发票。
+| 路径 | 已实现职责 |
+| --- | --- |
+| YAML | Repository/revision/file selection |
+| Hugging Face HTTP | Download source |
+| Loopback fixture | Offline reproduction |
+| JSON manifest | SHA256 and byte counts |
 
-<h2><img src="https://api.iconify.design/tabler:license.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> 许可证</h2>
+## 限制与后续方向
 
-MIT，见 [LICENSE](./LICENSE)。提 issue 或 PR 都欢迎 —— 尤其欢迎补 Gitee AI / ModelScope 上传实现（m2）。
+- 示例计算九个小型元数据 fixture 的哈希，不是生产权重，也不进行远程上传。
+- init、sync 和 list 尚未实现；Gitee AI 与 ModelScope 镜像属于后续计划。
+- 新计算的摘要记录收到的字节，不证明上游真实性，也不校验期望摘要。需要复现时应使用不可变版本。
 
-<p align="center"><sub><a href="./LICENSE">MIT</a> © 2026 SuperMarioYL</sub></p>
+镜像上传、自动生成锁文件、与已有可信清单比较是后续工作。
+
+## 许可与贡献
+
+许可见 [LICENSE](./LICENSE). 反馈问题时请提供最小输入、执行命令和实际输出。

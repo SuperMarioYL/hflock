@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "source_revision": "2508103c3bb2c2cb9bb97c7028be93522a5dea26",
+  "scope": "Nine small metadata files served from the bundled Hugging Face fixture on loopback, downloaded and SHA256-hashed; no real model weights or remote mirror uploads.",
+  "steps": [
+    {
+      "label": "Recorded run",
+      "body": "Nine small metadata files served from the bundled Hugging Face fixture on loopback, downloaded and SHA256-hashed; no real model weights or remote mirror uploads.",
+      "command": "python3 examples/presentation-demo.py",
+      "output": "source: local fixture; uploaded files: 0\ndeepseek-ai/DeepSeek-V3 config.json 146 b6c28b2ff63b535e4c3f1bac57c7da944ca8c098fbfab51befbd67d8b1ce59c7\ndeepseek-ai/DeepSeek-V3 generation_config.json 72 6d9c0a68128352b855b24b93d26cc6cb682de94fbe3bd5476cc548d76fbde572\ndeepseek-ai/DeepSeek-V3 tokenizer.json 121 2d162ff88f4721aaab432337fe7684c99b524f7b9ed12a96bac105471a8cdec0\nQwen/Qwen3-235B-A22B config.json 136 477797cbaa2e203b12b887f4dd0d50837f1083fb8c96614c60dc0a68e341ba51\nQwen/Qwen3-235B-A22B generation_config.json 72 6bdf409035dea3029e9f60144e1456598aa47d837381c524b441708ccafcb798\nQwen/Qwen3-235B-A22B tokenizer.json 118 8a9ebf95154a697efaf420257b2b31d198c8e81b840012f2aa170b38c6771677\nTHUDM/glm-4-9b-chat config.json 133 1227daa941278aa954f4e005cb4eed01af781ed2af76e539021fabb2faf34129\nTHUDM/glm-4-9b-chat generation_config.json 72 e06ed109d9bfa5faf7f3fedc0cc895d1fde272744ec9df0ccb13286fb28ce8ab\nTHUDM/glm-4-9b-chat tokenizer.json 117 35f88f9c371cb02c189d4f02a433629e028fc0f4f18f7d420ead0fef653edd2e\nhashed files: 9"
+    }
+  ]
+}

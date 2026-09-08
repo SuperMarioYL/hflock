@@ -1,0 +1,38 @@
+{
+  "mode": "auto",
+  "id": "565ee6-a66ae7-accbf6-add1ea3a373e",
+  "identity": "https://github.com/supermarioyl/hflock",
+  "primary": "#565ee6",
+  "secondary": "#a66ae7",
+  "highlight": "#accbf6",
+  "dark": {
+    "bg": "#050712",
+    "panel": "#0c101f",
+    "code": "#0a0d1d",
+    "ink": "#eef5fd",
+    "muted": "#959ec4",
+    "line": "#171a41",
+    "primary": "#676fe9",
+    "secondary": "#a66ae7",
+    "highlight": "#accbf6",
+    "accent": "#676fe9",
+    "buttonStart": "#565ee6",
+    "buttonEnd": "#925dcc",
+    "buttonText": "#ffffff"
+  },
+  "light": {
+    "bg": "#f9f9fe",
+    "panel": "#f7f7fe",
+    "code": "#f3f4fd",
+    "ink": "#131730",
+    "muted": "#556088",
+    "line": "#cbcef7",
+    "primary": "#565ee6",
+    "secondary": "#8a58c1",
+    "highlight": "#60718a",
+    "accent": "#565ee6",
+    "buttonStart": "#565ee6",
+    "buttonEnd": "#925dcc",
+    "buttonText": "#ffffff"
+  }
+}

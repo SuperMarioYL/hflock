@@ -1,150 +1,131 @@
-<div align="right"><sub><b>English</b>&nbsp;&nbsp;⇄&nbsp;&nbsp;<a href="./README.md">简体中文</a></sub></div>
+[简体中文](./README.md) · [Website](https://hflock.lei6393.com) · [GitHub](https://github.com/SuperMarioYL/hflock)
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./assets/hero-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="./assets/hero-light.svg">
-  <img src="./assets/hero-light.svg" width="880" alt="hflock">
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="./assets/presentation/hero-mobile-dark.svg">
+  <source media="(max-width: 600px)" srcset="./assets/presentation/hero-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/presentation/hero-dark.svg">
+  <img src="./assets/presentation/hero-light.svg" width="960" alt="Hero diagram">
 </picture>
 
-<p align="center"><sub>A CLI that mirrors and hash-verifies CN model weights — pinning DeepSeek/Qwen/GLM weights from Hugging Face to Gitee AI/ModelScope with a machine-checkable SHA256 provenance manifest.</sub></p>
+# hflock
 
-<p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="license"></a>
-  <a href="https://github.com/SuperMarioYL/hflock/releases"><img src="https://img.shields.io/github/v/release/SuperMarioYL/hflock?label=release" alt="release"></a>
-  <img src="https://img.shields.io/github/actions/workflow/status/SuperMarioYL/hflock/ci.yml?branch=main&label=CI" alt="CI">
-  <img src="https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white" alt="Go">
-</p>
+**Give downloaded model files a checkable manifest.**
 
-<p align="center"><b>Every CI pull of DeepSeek weights is a bet that the GFW and Hugging Face won't break — hflock pins the mirror, the hash, and the rebuildability into Git with one lockfile.</b></p>
+hflock reads a YAML list of repositories, revisions and files, downloads those files, and writes a JSON manifest containing their hashes and sizes.
 
-<h2><img src="https://api.iconify.design/tabler:topology-star-3.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> Architecture</h2>
+## Why use it
+
+A model download is hard to reproduce when the chosen revision and exact bytes are undocumented. Store the requested files in a lockfile and retain the generated hash manifest alongside your build.
+
+- **Declare the input** — Keep repository, revision and filenames in YAML.
+- **Record exact bytes** — Each download yields a SHA256 digest and byte count.
+- **Reproduce offline** — The bundled HTTP fixture exercises the download and hashing path.
+
+## Architecture
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./assets/atlas-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="./assets/atlas-light.svg">
-  <img src="./assets/atlas-light.svg" width="880" alt="architecture: lockfile → verify (HF download + SHA256) → manifest; m2 mirror targets not yet wired">
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="./assets/presentation/architecture-mobile-dark.svg">
+  <source media="(max-width: 600px)" srcset="./assets/presentation/architecture-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/presentation/architecture-dark.svg">
+  <img src="./assets/presentation/architecture-light.svg" width="960" alt="Architecture diagram">
 </picture>
 
-<p>v0.1 (m1) wires only the blue and purple segments: <b>lockfile → download from Hugging Face → recompute SHA256 → write <code>weights.lock.manifest.json</code></b>. That manifest is the provenance record a CI air-gap gate can fail on. Mirroring to Gitee AI + ModelScope lands in m2 (the dashed node).</p>
+The lockfile loader validates the request. The Hugging Face source resolves explicit filenames or globs and streams downloads through a SHA256 hasher into a local cache. The verifier writes repository, revision, path, size and digest to the manifest. It does not compare that digest with a trusted baseline.
 
-## Contents
+| Component | Responsibility |
+| --- | --- |
+| `YAML lockfile` | internal/lockfile |
+| `HF source` | internal/mirror/hf.go |
+| `Download + SHA256` | internal/verify/verify.go |
+| `JSON manifest` | Hash entries and sizes |
 
-- [Why hflock](#why-hflock)
-- [Install & Quickstart](#install--quickstart)
-- [Usage](#usage)
-- [Demo](#demo)
-- [Configuration](#configuration)
-- [Comparison](#comparison)
-- [Roadmap](#roadmap)
-- [Paid · Hosted tier](#paid--hosted-tier)
-- [License](#license)
+## Install and quickstart
 
-## Why hflock
-
-CN AI/dev-ops engineers pin production builds to DeepSeek, Qwen, and GLM weights whose only canonical source is Hugging Face — reachable from inside the GFW through a reverse proxy with **no SLA and no provenance** (hf-mirror.com), or through ModelScope, which mirrors a **lagging, partial subset**. Neither lets you prove to an auditor or a CI gate that "these bytes are correct and rebuildable."
-
-hflock turns that into a declarative lockfile: you commit <code>weights.lock.yaml</code> pinning repo@revision + files, and <code>hflock verify</code> downloads from Hugging Face, recomputes each file's SHA256, and writes a machine-checkable manifest. Provenance is verifiable before any mirror exists — which is exactly why m1 ships it first.
-
-<h2><img src="https://api.iconify.design/tabler:rocket.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> Install & Quickstart</h2>
-
-One static binary, no Python runtime. Cold clone to first visible result, three commands, fully offline (a bundled fixture stands in for Hugging Face):
+Build with the version declared in the repository manifest. Run the example from the repository root.
 
 ```bash
-git clone https://github.com/SuperMarioYL/hflock && cd hflock
-go build -o hflock ./cmd/hflock
-python3 -m http.server 8053 --directory examples/fixture & \
-  HFLOCK_HF_BASE=http://localhost:8053 ./hflock verify examples/weights.lock.yaml
+git clone https://github.com/SuperMarioYL/hflock.git
+cd hflock
+go build ./cmd/hflock
 ```
 
-<details><summary>Sample output (weights.lock.manifest.json)</summary>
-
-```json
-{
-  "lock_version": "0.1.0",
-  "generated_at": "2026-08-27T16:36:17Z",
-  "entries": [
-    { "repo": "deepseek-ai/DeepSeek-V3", "revision": "v3.0", "file": "config.json", "sha256": "b6c28b2f…", "size": 146 },
-    { "repo": "Qwen/Qwen3-235B-A22B", "revision": "main", "file": "tokenizer.json", "sha256": "8a9ebf95…", "size": 118 }
-  ]
-}
-```
-</details>
-
-> Against real Hugging Face (downloads the real large weights): `go install github.com/SuperMarioYL/hflock@latest`, drop `HFLOCK_HF_BASE`, and run `hflock verify weights.lock.yaml` directly.
-
-<h2><img src="https://api.iconify.design/tabler:terminal-2.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> Usage</h2>
-
-Write a `weights.lock.yaml` pinning the CN weights your CI depends on:
-
-```yaml
-version: "0.1.0"
-weights:
-  - repo: deepseek-ai/DeepSeek-V3
-    revision: v3.0
-    files: ["config.json", "*.safetensors"]   # globs expand via the HF file-tree API at verify time
-    source: huggingface
-```
-
-Verify and emit the provenance manifest (the m1 core):
+The Python example serves examples/fixture on loopback, runs the real verify command and prints each generated hash. It stops the server and removes its temporary cache on exit.
 
 ```bash
-hflock verify weights.lock.yaml                       # → weights.lock.manifest.json
-hflock verify weights.lock.yaml -m ci/manifest.json   # explicit output path
-hflock verify weights.lock.yaml --progress            # progress bar for large files
+python3 examples/presentation-demo.py
 ```
 
-CI air-gap gate: commit the manifest to the repo; the next `hflock verify` recomputes hashes and diffs against it to pass/fail (m3's `--check` gives a standard exit code).
+## Recorded demo
 
-Full example at [`examples/weights.lock.yaml`](./examples/weights.lock.yaml).
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="./assets/presentation/process-mobile-dark.svg">
+  <source media="(max-width: 600px)" srcset="./assets/presentation/process-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/presentation/process-dark.svg">
+  <img src="./assets/presentation/process-light.svg" width="960" alt="Process diagram">
+</picture>
 
-<h2><img src="https://api.iconify.design/tabler:photo.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> Demo</h2>
+Nine fixture files produce nine SHA256 entries; no mirror upload is attempted.
 
-<p>The full flow — lockfile to SHA256 provenance manifest — against the offline fixture:</p>
+```text
+source: local fixture; uploaded files: 0
+deepseek-ai/DeepSeek-V3 config.json 146 b6c28b2ff63b535e4c3f1bac57c7da944ca8c098fbfab51befbd67d8b1ce59c7
+deepseek-ai/DeepSeek-V3 generation_config.json 72 6d9c0a68128352b855b24b93d26cc6cb682de94fbe3bd5476cc548d76fbde572
+deepseek-ai/DeepSeek-V3 tokenizer.json 121 2d162ff88f4721aaab432337fe7684c99b524f7b9ed12a96bac105471a8cdec0
+Qwen/Qwen3-235B-A22B config.json 136 477797cbaa2e203b12b887f4dd0d50837f1083fb8c96614c60dc0a68e341ba51
+Qwen/Qwen3-235B-A22B generation_config.json 72 6bdf409035dea3029e9f60144e1456598aa47d837381c524b441708ccafcb798
+Qwen/Qwen3-235B-A22B tokenizer.json 118 8a9ebf95154a697efaf420257b2b31d198c8e81b840012f2aa170b38c6771677
+THUDM/glm-4-9b-chat config.json 133 1227daa941278aa954f4e005cb4eed01af781ed2af76e539021fabb2faf34129
+THUDM/glm-4-9b-chat generation_config.json 72 e06ed109d9bfa5faf7f3fedc0cc895d1fde272744ec9df0ccb13286fb28ce8ab
+THUDM/glm-4-9b-chat tokenizer.json 117 35f88f9c371cb02c189d4f02a433629e028fc0f4f18f7d420ead0fef653edd2e
+hashed files: 9
+```
 
-<p align="center"><img src="./assets/demo.gif" width="720" alt="hflock demo"></p>
+The complete command and output are recorded in [docs/demo-results.json](./docs/demo-results.json). Inputs and reproduction code are included in the repository.
 
-<p align="center"><sub>Full terminal recording: <a href="./assets/demo.cast">asciinema cast</a> · script: <a href="./docs/demo.tape">docs/demo.tape</a></sub></p>
+![Existing terminal recording](./assets/demo.gif)
 
-<h2><img src="https://api.iconify.design/tabler:adjustments.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> Configuration</h2>
+The existing recording is retained for context; the text example above documents the reproducible scenario.
 
-| Flag / env | Type | Default | Meaning |
-| --- | --- | --- | --- |
-| `--hf-base` / `HFLOCK_HF_BASE` | string | `https://huggingface.co` | Hugging Face source URL; override for the offline fixture or a self-hosted endpoint |
-| `--workdir` / `HFLOCK_WORKDIR` | path | system temp | download cache dir |
-| `--manifest` / `-m` | path | `weights.lock.manifest.json` | manifest output path |
-| `--progress` | bool | `false` | show a per-file download progress bar |
+## Usage
 
-## Comparison
+The CLI exposes the following operations. Commands after the example use your own paths or identifiers.
 
-| Axis | hflock | hf-mirror.com | ModelScope | huggingface-cli |
-| --- | :---: | :---: | :---: | :---: |
-| Declarative pin (lockfile in Git) | ✓ | ✗ | ✗ | ✗ |
-| Multi-mirror (Gitee + ModelScope, concurrent) | ✓ (m2) | ✗ (single proxy) | ✗ (single platform) | ✗ |
-| Hash-provenance manifest (CI-checkable) | ✓ | ✗ | ✗ | partial (needs hand-rolled sha256sum) |
-| Hosted stability / SLA | ✗ (OSS, self-hosted) | ✗ (community proxy) | ✓ (Alibaba-hosted) | — |
-| Zero-config, ready to go | ✗ (needs a lockfile) | ✓ | ✓ | ✓ |
+```bash
+go run ./cmd/hflock verify examples/weights.lock.yaml --manifest weights.lock.manifest.json
+# Use your own lockfile for actual downloads:
+hflock verify weights.lock.yaml --progress
+```
 
-Honest: for SLA and zero-config, ModelScope or hf-mirror are better today. hflock's edge is the **declarative pin + verifiable provenance** that nobody else does.
+## Configuration
 
-<h2><img src="https://api.iconify.design/tabler:map-2.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> Roadmap</h2>
+--hf-base or HFLOCK_HF_BASE selects the HTTP source. --workdir or HFLOCK_WORKDIR selects the download cache. --manifest/-m selects the output file; --progress enables per-file progress. The example starts a loopback fixture server and uses a temporary cache.
 
-- [x] **m1 — lockfile + hash verify**: `WeightLock` parse/validate + SHA256 verification, `hflock verify` emits the provenance manifest (this release)
-- [ ] **m2 — mirror sync**: `hflock sync` reads the lockfile, downloads from Hugging Face, uploads to Gitee AI + ModelScope concurrently/resumably, then verifies
-- [ ] **m3 — init + CI gate**: `hflock init` generates a lockfile from HF repo refs; `hflock list` per-weight status table; `--check` exit codes for CI air-gap gates; the full demo tape
-- [ ] Future: incremental sync, sigstore-signed provenance, Baidu Wangpan / Aliyun OSS mirrors
+## Integrations and responsibilities
 
-## Paid · Hosted tier
+<picture>
+  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="./assets/presentation/integrations-mobile-dark.svg">
+  <source media="(max-width: 600px)" srcset="./assets/presentation/integrations-mobile-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="./assets/presentation/integrations-dark.svg">
+  <img src="./assets/presentation/integrations-light.svg" width="960" alt="Integrations diagram">
+</picture>
 
-v0.1 ships only the OSS engine (MIT) and sells nothing. But the commercial path is real, and stated here so you don't have to ask:
+The following routes are implemented in the source. Choose the input that matches your task and keep the resulting artifact with your project.
 
-- **Who pays**: CN ML platform teams and compliance roles at regulated industries (finance / government) who need a "data does not leave the country" attestation an auditor will accept.
-- **What they buy**: a hosted mirror with an SLA plus signed (sigstore) provenance reports — the surface the v0.1 OSS engine proves out, with an operating layer on top.
-- **Price band**: roughly ¥3k–8k / month / team (below one SRE's self-hosting cost).
-- **Smallest loop**: the OSS CLI lands an inbound from a compliance team → v0.2 opens a hosted tier on Aliyun (ECS + OSS for weights) + billing → one signed provenance PDF per pinned weight set.
-- **Honest gate**: no paid tier ships until v0.1 hits day-30 indicators (≥100 stars, ≥10 active users) — a commercial surface with no OSS traction is just an invoice.
+| Route | Implemented role |
+| --- | --- |
+| YAML | Repository/revision/file selection |
+| Hugging Face HTTP | Download source |
+| Loopback fixture | Offline reproduction |
+| JSON manifest | SHA256 and byte counts |
 
-<h2><img src="https://api.iconify.design/tabler:license.svg?color=%230071E3&width=24" height="22" align="absmiddle" alt=""> License</h2>
+## Limits and next steps
 
-MIT, see [LICENSE](./LICENSE). Issues and PRs welcome — especially Gitee AI / ModelScope upload implementations (m2).
+- The demo hashes nine small metadata fixtures, not production weights. It performs no remote uploads.
+- init, sync and list are not implemented. Gitee AI and ModelScope mirroring remain roadmap items.
+- A newly computed digest records received bytes; it does not establish upstream authenticity or verify an expected digest. Use immutable revisions when reproducibility matters.
 
-<p align="center"><sub><a href="./LICENSE">MIT</a> © 2026 SuperMarioYL</sub></p>
+Mirror uploads, lockfile generation and comparison against an existing trusted manifest are future work.
+
+## License and contributions
+
+See [LICENSE](./LICENSE). When reporting an issue, include a minimal input, the command, and the observed output.

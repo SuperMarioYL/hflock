@@ -1,41 +1,215 @@
 {
-  "schema": 1,
+  "schema": 3,
   "name": "hflock",
   "github": "https://github.com/SuperMarioYL/hflock",
   "host": "hflock.lei6393.com",
-  "lang": { "primary": "zh", "toggle": true },
-  "accent": ["#7c6ff0", "#4d9bff", "#34e5d0"],
+  "palette": "auto",
+  "lang": {
+    "primary": "en",
+    "toggle": true
+  },
+  "meta": {
+    "visual_style": "neon-particle",
+    "demo_source": "docs/demo-results.json"
+  },
   "hero": {
-    "eyebrow": { "zh": "本地 · 无账号 · 哈希溯源", "en": "Local · No Account · Hash-Verified" },
-    "headline": { "zh": "一条命令锁定国产模型权重\n镜像到 Gitee/ModelScope 并校验", "en": "Pin CN model weights in one command\nMirror to Gitee/ModelScope with hash proof" },
-    "sub": { "zh": "把 DeepSeek/Qwen/GLM 权重从 Hugging Face 声明式锁定、镜像到国产平台、并逐文件校验 SHA256 — 不再依赖单一来源。", "en": "Declaratively pin DeepSeek/Qwen/GLM weights from Hugging Face, mirror to CN platforms, and verify SHA256 per file — no single-source dependency." },
-    "command": "hflock verify weights.lock.yaml",
-    "cta": { "zh": "查看 GitHub", "en": "View on GitHub" },
-    "ctaGithub": { "zh": "安装", "en": "Install" },
-    "scroll": { "zh": "为什么需要", "en": "Why you need it" }
+    "headline": {
+      "en": "Give downloaded model files a checkable manifest.",
+      "zh": "为下载的模型文件生成可检查的清单。"
+    },
+    "sub": {
+      "en": "hflock reads a YAML list of repositories, revisions and files, downloads those files, and writes a JSON manifest containing their hashes and sizes.",
+      "zh": "hflock 读取 YAML 中的仓库、版本和文件列表，下载文件，再生成包含哈希与大小的 JSON 清单。"
+    },
+    "href": "#quickstart"
   },
   "advantages": [
     {
-      "title": { "zh": "声明式锁定，不是手动下载", "en": "Declarative lock, not manual download" },
-      "body": { "zh": "在 weights.lock.yaml 里写明模型名和文件，一条命令解析、下载、校验 — 像包管理器锁定依赖一样锁定权重。", "en": "List models and files in weights.lock.yaml; one command parses, downloads, and verifies — pinning weights like a package manager pins dependencies." },
-      "chips": ["› weights.lock.yaml", "› glob 支持", "› SHA256 逐文件校验"]
+      "title": {
+        "en": "Declare the input",
+        "zh": "声明输入"
+      },
+      "body": {
+        "en": "Keep repository, revision and filenames in YAML.",
+        "zh": "把仓库、版本和文件名保存在 YAML 中。"
+      }
     },
     {
-      "title": { "zh": "镜像到国产平台，不再依赖单一来源", "en": "Mirror to CN platforms, no single-source dependency" },
-      "body": { "zh": "NVIDIA 收购 Hugging Face 后，权重来源的稳定性存疑。hflock 把权重镜像到 Gitee AI 和 ModelScope，哈希可追溯。", "en": "After NVIDIA acquired Hugging Face, weight source stability is uncertain. hflock mirrors to Gitee AI and ModelScope with traceable hashes." },
-      "chips": ["› Gitee AI", "› ModelScope", "› 哈希溯源"]
+      "title": {
+        "en": "Record exact bytes",
+        "zh": "记录实际字节"
+      },
+      "body": {
+        "en": "Each download yields a SHA256 digest and byte count.",
+        "zh": "每次下载生成 SHA256 摘要与字节数。"
+      }
     },
     {
-      "title": { "zh": "CI/air-gap 友好，单二进制", "en": "CI/air-gap friendly, single binary" },
-      "body": { "zh": "Go 编译的单二进制，放进 CI pipeline 或离线环境即可使用 — 不需要 Python 运行时，不需要账号。", "en": "A single Go binary that drops into CI pipelines or air-gapped environments — no Python runtime, no account required." },
-      "chips": ["› go install", "› 零依赖运行", "› CI 集成"]
+      "title": {
+        "en": "Reproduce offline",
+        "zh": "离线复现"
+      },
+      "body": {
+        "en": "The bundled HTTP fixture exercises the download and hashing path.",
+        "zh": "随仓 HTTP fixture 可运行下载与哈希计算链路。"
+      }
     }
   ],
-  "scene": { "kind": "hub-nodes", "nodes": ["Hugging Face", "Gitee AI", "ModelScope", "weights.lock.yaml", "SHA256"] },
-  "cta": {
-    "headline": { "zh": "开始锁定你的模型权重", "en": "Start pinning your model weights" },
-    "sub": { "zh": "MIT 开源 · 一条命令安装", "en": "MIT open source · one command install" },
-    "button": { "zh": "go install", "en": "go install" }
+  "demo": {
+    "title": {
+      "en": "Run it on a complete example",
+      "zh": "运行完整示例"
+    },
+    "note": {
+      "en": "The Python example serves examples/fixture on loopback, runs the real verify command and prints each generated hash. It stops the server and removes its temporary cache on exit.",
+      "zh": "Python 示例在 loopback 提供 examples/fixture，运行真实 verify 命令并打印生成的哈希；退出时停止服务并删除自身临时缓存。"
+    },
+    "source": "https://github.com/SuperMarioYL/hflock/blob/main/docs/demo-results.json",
+    "steps": [
+      {
+        "label": "Recorded run",
+        "body": "Nine small metadata files served from the bundled Hugging Face fixture on loopback, downloaded and SHA256-hashed; no real model weights or remote mirror uploads.",
+        "command": "python3 examples/presentation-demo.py",
+        "output": "source: local fixture; uploaded files: 0\ndeepseek-ai/DeepSeek-V3 config.json 146 b6c28b2ff63b535e4c3f1bac57c7da944ca8c098fbfab51befbd67d8b1ce59c7\ndeepseek-ai/DeepSeek-V3 generation_config.json 72 6d9c0a68128352b855b24b93d26cc6cb682de94fbe3bd5476cc548d76fbde572\ndeepseek-ai/DeepSeek-V3 tokenizer.json 121 2d162ff88f4721aaab432337fe7684c99b524f7b9ed12a96bac105471a8cdec0\nQwen/Qwen3-235B-A22B config.json 136 477797cbaa2e203b12b887f4dd0d50837f1083fb8c96614c60dc0a68e341ba51\nQwen/Qwen3-235B-A22B generation_config.json 72 6bdf409035dea3029e9f60144e1456598aa47d837381c524b441708ccafcb798\nQwen/Qwen3-235B-A22B tokenizer.json 118 8a9ebf95154a697efaf420257b2b31d198c8e81b840012f2aa170b38c6771677\nTHUDM/glm-4-9b-chat config.json 133 1227daa941278aa954f4e005cb4eed01af781ed2af76e539021fabb2faf34129\nTHUDM/glm-4-9b-chat generation_config.json 72 e06ed109d9bfa5faf7f3fedc0cc895d1fde272744ec9df0ccb13286fb28ce8ab\nTHUDM/glm-4-9b-chat tokenizer.json 117 35f88f9c371cb02c189d4f02a433629e028fc0f4f18f7d420ead0fef653edd2e\nhashed files: 9",
+        "image": "/assets/presentation/demo-0-light.svg",
+        "imageDark": "/assets/presentation/demo-0-dark.svg"
+      }
+    ]
   },
-  "footer": { "tag": { "zh": "MIT © 2026 SuperMarioYL", "en": "MIT © 2026 SuperMarioYL" } }
+  "quickstart": {
+    "title": {
+      "en": "Try it locally",
+      "zh": "本地上手"
+    },
+    "body": {
+      "en": "The Python example serves examples/fixture on loopback, runs the real verify command and prints each generated hash. It stops the server and removes its temporary cache on exit.",
+      "zh": "Python 示例在 loopback 提供 examples/fixture，运行真实 verify 命令并打印生成的哈希；退出时停止服务并删除自身临时缓存。"
+    },
+    "steps": [
+      {
+        "title": {
+          "en": "Install from source",
+          "zh": "从源码安装"
+        },
+        "code": "git clone https://github.com/SuperMarioYL/hflock.git\ncd hflock\ngo build ./cmd/hflock"
+      },
+      {
+        "title": {
+          "en": "Run the included example",
+          "zh": "运行随仓示例"
+        },
+        "code": "python3 examples/presentation-demo.py"
+      }
+    ]
+  },
+  "limitations": [
+    {
+      "en": "The demo hashes nine small metadata fixtures, not production weights. It performs no remote uploads.",
+      "zh": "示例计算九个小型元数据 fixture 的哈希，不是生产权重，也不进行远程上传。"
+    },
+    {
+      "en": "init, sync and list are not implemented. Gitee AI and ModelScope mirroring remain roadmap items.",
+      "zh": "init、sync 和 list 尚未实现；Gitee AI 与 ModelScope 镜像属于后续计划。"
+    },
+    {
+      "en": "A newly computed digest records received bytes; it does not establish upstream authenticity or verify an expected digest. Use immutable revisions when reproducibility matters.",
+      "zh": "新计算的摘要记录收到的字节，不证明上游真实性，也不校验期望摘要。需要复现时应使用不可变版本。"
+    }
+  ],
+  "scene": {
+    "kind": "neon-graph",
+    "fallback": "/assets/presentation/scene-dark.svg",
+    "fallbackLight": "/assets/presentation/scene-light.svg"
+  },
+  "story": {
+    "intro": {
+      "title": {
+        "en": "A concrete task",
+        "zh": "从实际任务出发"
+      },
+      "body": {
+        "en": "A model download is hard to reproduce when the chosen revision and exact bytes are undocumented. Store the requested files in a lockfile and retain the generated hash manifest alongside your build.",
+        "zh": "如果没有记录版本和实际字节，模型下载很难复现。把需要的文件写入锁文件，再将哈希清单与构建一起保存。"
+      }
+    },
+    "sections": [
+      {
+        "title": {
+          "en": "Follow the operation",
+          "zh": "处理过程"
+        },
+        "body": {
+          "en": "The lockfile loader validates the request. The Hugging Face source resolves explicit filenames or globs and streams downloads through a SHA256 hasher into a local cache. The verifier writes repository, revision, path, size and digest to the manifest. It does not compare that digest with a trusted baseline.",
+          "zh": "锁文件加载器校验请求；Hugging Face 源解析文件名或 glob，将下载流同时写入本地缓存并计算 SHA256。验证器把仓库、版本、路径、大小和摘要写入清单；它不会自动将摘要与可信基线比较。"
+        },
+        "image": {
+          "light": "/assets/presentation/process-light.svg",
+          "dark": "/assets/presentation/process-dark.svg",
+          "alt": {
+            "en": "Follow the operation",
+            "zh": "处理过程"
+          }
+        }
+      },
+      {
+        "title": {
+          "en": "How hflock works",
+          "zh": "hflock 的工作方式"
+        },
+        "body": {
+          "en": "The lockfile loader validates the request. The Hugging Face source resolves explicit filenames or globs and streams downloads through a SHA256 hasher into a local cache. The verifier writes repository, revision, path, size and digest to the manifest. It does not compare that digest with a trusted baseline.",
+          "zh": "锁文件加载器校验请求；Hugging Face 源解析文件名或 glob，将下载流同时写入本地缓存并计算 SHA256。验证器把仓库、版本、路径、大小和摘要写入清单；它不会自动将摘要与可信基线比较。"
+        },
+        "image": {
+          "light": "/assets/presentation/architecture-light.svg",
+          "dark": "/assets/presentation/architecture-dark.svg",
+          "alt": {
+            "en": "How hflock works",
+            "zh": "hflock 的工作方式"
+          }
+        }
+      },
+      {
+        "title": {
+          "en": "Connect the pieces",
+          "zh": "输入与输出"
+        },
+        "body": {
+          "en": "The following routes are implemented in the source. Choose the input that matches your task and keep the resulting artifact with your project.",
+          "zh": "以下路径已有源码实现。按任务选择输入，并把生成的结果与项目一起保存。"
+        },
+        "image": {
+          "light": "/assets/presentation/integrations-light.svg",
+          "dark": "/assets/presentation/integrations-dark.svg",
+          "alt": {
+            "en": "Connect the pieces",
+            "zh": "输入与输出"
+          }
+        }
+      }
+    ],
+    "details": [
+      {
+        "title": {
+          "en": "Configuration",
+          "zh": "配置"
+        },
+        "body": {
+          "en": "--hf-base or HFLOCK_HF_BASE selects the HTTP source. --workdir or HFLOCK_WORKDIR selects the download cache. --manifest/-m selects the output file; --progress enables per-file progress. The example starts a loopback fixture server and uses a temporary cache.",
+          "zh": "--hf-base 或 HFLOCK_HF_BASE 指定 HTTP 源；--workdir 或 HFLOCK_WORKDIR 指定下载缓存；--manifest/-m 指定输出文件；--progress 显示进度。示例启动 loopback fixture 服务并使用临时缓存。"
+        }
+      },
+      {
+        "title": {
+          "en": "Further use",
+          "zh": "进一步使用"
+        },
+        "body": {
+          "en": "The CLI exposes the following operations. Commands after the example use your own paths or identifiers.",
+          "zh": "CLI 提供以下操作。示例之外的命令需要替换成你的文件路径或标识。"
+        },
+        "code": "go run ./cmd/hflock verify examples/weights.lock.yaml --manifest weights.lock.manifest.json\n# Use your own lockfile for actual downloads:\nhflock verify weights.lock.yaml --progress"
+      }
+    ]
+  }
 }

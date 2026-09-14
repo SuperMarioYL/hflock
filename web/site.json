@@ -18,8 +18,8 @@
       "zh": "为下载的模型文件生成可检查的清单。"
     },
     "sub": {
-      "en": "hflock reads a YAML list of repositories, revisions and files, downloads those files, and writes a JSON manifest containing their hashes and sizes.",
-      "zh": "hflock 读取 YAML 中的仓库、版本和文件列表，下载文件，再生成包含哈希与大小的 JSON 清单。"
+      "en": "hflock reads a YAML list of repositories, revisions and files, downloads those files, writes a JSON manifest of their hashes and sizes, and mirrors them to Gitee AI / ModelScope.",
+      "zh": "hflock 读取 YAML 中的仓库、版本和文件列表，下载文件，生成包含哈希与大小的 JSON 清单，并可镜像到 Gitee AI / ModelScope。"
     },
     "href": "#quickstart"
   },
@@ -104,16 +104,16 @@
   },
   "limitations": [
     {
-      "en": "The demo hashes nine small metadata fixtures, not production weights. It performs no remote uploads.",
-      "zh": "示例计算九个小型元数据 fixture 的哈希，不是生产权重，也不进行远程上传。"
+      "en": "The demo hashes nine small metadata fixtures, not production weights; real mirror uploads need platform tokens.",
+      "zh": "示例计算九个小型元数据 fixture 的哈希，不是生产权重；真实镜像上传需要各平台令牌。"
     },
     {
-      "en": "init, sync and list are not implemented. Gitee AI and ModelScope mirroring remain roadmap items.",
-      "zh": "init、sync 和 list 尚未实现；Gitee AI 与 ModelScope 镜像属于后续计划。"
+      "en": "sync ships mirror upload: ModelScope via its REST API; Gitee AI has no REST upload API, so hflock drives the platform's documented git push flow — large LFS pushes there need the operator's gai / git-lfs setup.",
+      "zh": "sync 已实现镜像上传：ModelScope 走其 REST API；Gitee AI 无 REST 上传接口，按平台文档走 git push 流程——大文件 LFS 推送需要操作者自行配置 gai / git-lfs。"
     },
     {
-      "en": "A newly computed digest records received bytes; it does not establish upstream authenticity or verify an expected digest. Use immutable revisions when reproducibility matters.",
-      "zh": "新计算的摘要记录收到的字节，不证明上游真实性，也不校验期望摘要。需要复现时应使用不可变版本。"
+      "en": "A newly computed digest records received bytes; it does not establish upstream authenticity. verify --check diffs against a baseline manifest you retain. Use immutable revisions when reproducibility matters.",
+      "zh": "新计算的摘要记录收到的字节，不证明上游真实性；verify --check 只与你保留的基线清单比对。需要复现时应使用不可变版本。"
     }
   ],
   "scene": {
@@ -139,8 +139,8 @@
           "zh": "处理过程"
         },
         "body": {
-          "en": "The lockfile loader validates the request. The Hugging Face source resolves explicit filenames or globs and streams downloads through a SHA256 hasher into a local cache. The verifier writes repository, revision, path, size and digest to the manifest. It does not compare that digest with a trusted baseline.",
-          "zh": "锁文件加载器校验请求；Hugging Face 源解析文件名或 glob，将下载流同时写入本地缓存并计算 SHA256。验证器把仓库、版本、路径、大小和摘要写入清单；它不会自动将摘要与可信基线比较。"
+          "en": "The lockfile loader validates the request. The Hugging Face source resolves explicit filenames or globs and streams downloads (resumable via Range requests) through a SHA256 hasher into a local cache. The verifier writes repository, revision, path, size and digest to the manifest, and verify --check can diff a fresh run against a trusted baseline for the CI air-gap gate.",
+          "zh": "锁文件加载器校验请求；Hugging Face 源解析文件名或 glob，将下载流（支持 Range 断点续传）同时写入本地缓存并计算 SHA256。验证器把仓库、版本、路径、大小和摘要写入清单；verify --check 可将新一次运行与可信基线比对，作为 CI 气隙门禁。"
         },
         "image": {
           "light": "/assets/presentation/process-light.svg",
@@ -161,8 +161,8 @@
           "zh": "hflock 的工作方式"
         },
         "body": {
-          "en": "The lockfile loader validates the request. The Hugging Face source resolves explicit filenames or globs and streams downloads through a SHA256 hasher into a local cache. The verifier writes repository, revision, path, size and digest to the manifest. It does not compare that digest with a trusted baseline.",
-          "zh": "锁文件加载器校验请求；Hugging Face 源解析文件名或 glob，将下载流同时写入本地缓存并计算 SHA256。验证器把仓库、版本、路径、大小和摘要写入清单；它不会自动将摘要与可信基线比较。"
+          "en": "verify re-downloads and re-hashes the pin set; sync mirrors the cached files to Gitee AI (git push, the platform's documented flow) and ModelScope (REST: repo ensure, LFS batch, presigned PUT, commit), recording each entry's mirrors in the manifest; init generates a lockfile from an HF repo; list shows per-weight status.",
+          "zh": "verify 重新下载并哈希整个 pin 集；sync 把缓存文件镜像到 Gitee AI（平台文档的 git push 流程）与 ModelScope（REST：建仓、LFS batch、预签名 PUT、commit），并在清单中记录每条目的镜像；init 从 HF 仓库生成锁文件；list 显示每个 pin 的状态。"
         },
         "image": {
           "light": "/assets/presentation/architecture-light.svg",
@@ -207,8 +207,8 @@
           "zh": "配置"
         },
         "body": {
-          "en": "--hf-base or HFLOCK_HF_BASE selects the HTTP source. --workdir or HFLOCK_WORKDIR selects the download cache. --manifest/-m selects the output file; --progress enables per-file progress. The example starts a loopback fixture server and uses a temporary cache.",
-          "zh": "--hf-base 或 HFLOCK_HF_BASE 指定 HTTP 源；--workdir 或 HFLOCK_WORKDIR 指定下载缓存；--manifest/-m 指定输出文件；--progress 显示进度。示例启动 loopback fixture 服务并使用临时缓存。"
+          "en": "--hf-base or HFLOCK_HF_BASE selects the HTTP source. --workdir or HFLOCK_WORKDIR selects the download cache. --manifest/-m selects the output file; --progress enables per-file progress. sync adds --mirrors (default gitee-ai,modelscope), --concurrency, and the HFLOCK_GITEE_TOKEN / HFLOCK_MODELSCOPE_TOKEN upload tokens.",
+          "zh": "--hf-base 或 HFLOCK_HF_BASE 指定 HTTP 源；--workdir 或 HFLOCK_WORKDIR 指定下载缓存；--manifest/-m 指定输出文件；--progress 显示进度。sync 额外支持 --mirrors（默认 gitee-ai,modelscope）、--concurrency 与 HFLOCK_GITEE_TOKEN / HFLOCK_MODELSCOPE_TOKEN 上传令牌。"
         }
       },
       {
@@ -217,10 +217,10 @@
           "zh": "进一步使用"
         },
         "body": {
-          "en": "The CLI exposes the following operations. Commands after the example use your own paths or identifiers.",
-          "zh": "CLI 提供以下操作。示例之外的命令需要替换成你的文件路径或标识。"
+          "en": "The full command set. Replace the repo, paths and identifiers with your own.",
+          "zh": "完整命令集。示例之外的命令需要替换成你的仓库、文件路径或标识。"
         },
-        "code": "go run ./cmd/hflock verify examples/weights.lock.yaml --manifest weights.lock.manifest.json\n# Use your own lockfile for actual downloads:\nhflock verify weights.lock.yaml --progress"
+        "code": "hflock init deepseek-ai/DeepSeek-V3 --revision v3.0\nHFLOCK_GITEE_TOKEN=… HFLOCK_MODELSCOPE_TOKEN=… hflock sync weights.lock.yaml\nhflock verify weights.lock.yaml --check weights.lock.manifest.json\nhflock list weights.lock.yaml"
       }
     ]
   }

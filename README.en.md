@@ -11,7 +11,7 @@
 
 **Give downloaded model files a checkable manifest.**
 
-hflock reads a YAML list of repositories, revisions and files, downloads those files, and writes a JSON manifest containing their hashes and sizes.
+hflock reads a YAML list of repositories, revisions and files, downloads those files, writes a JSON manifest containing their hashes and sizes, and can mirror the files to Gitee AI / ModelScope via `hflock sync`.
 
 ## Why use it
 
@@ -91,14 +91,30 @@ The existing recording is retained for context; the text example above documents
 The CLI exposes the following operations. Commands after the example use your own paths or identifiers.
 
 ```bash
+# Generate a lockfile pinning an HF repo (metadata files by default;
+# --files for explicit patterns, --all for every file)
+hflock init deepseek-ai/DeepSeek-V3 --revision v3.0
+
+# Download + hash + mirror upload (Gitee AI + ModelScope; tokens via env or flags)
+HFLOCK_GITEE_TOKEN=… HFLOCK_MODELSCOPE_TOKEN=… hflock sync weights.lock.yaml
+
+# Re-download and hash, diffing against a trusted baseline manifest
+# (the CI air-gap gate: any difference exits 1)
+hflock verify weights.lock.yaml --check weights.lock.manifest.json
+
+# Show per-weight mirror and hash status
+hflock list weights.lock.yaml
+```
+
+Bundled fixture example (offline, no real network):
+
+```bash
 go run ./cmd/hflock verify examples/weights.lock.yaml --manifest weights.lock.manifest.json
-# Use your own lockfile for actual downloads:
-hflock verify weights.lock.yaml --progress
 ```
 
 ## Configuration
 
---hf-base or HFLOCK_HF_BASE selects the HTTP source. --workdir or HFLOCK_WORKDIR selects the download cache. --manifest/-m selects the output file; --progress enables per-file progress. The example starts a loopback fixture server and uses a temporary cache.
+--hf-base or HFLOCK_HF_BASE selects the HTTP source. --workdir or HFLOCK_WORKDIR selects the download cache. --manifest/-m selects the output file; --progress enables per-file progress. sync additionally supports --mirrors (upload targets, default gitee-ai,modelscope), --concurrency (parallel downloads), HFLOCK_GITEE_TOKEN / HFLOCK_MODELSCOPE_TOKEN upload tokens, and HFLOCK_GITEE_USER (git https username, default oauth2). The example starts a loopback fixture server and uses a temporary cache.
 
 ## Integrations and responsibilities
 
@@ -114,18 +130,21 @@ The following routes are implemented in the source. Choose the input that matche
 | Route | Implemented role |
 | --- | --- |
 | YAML | Repository/revision/file selection |
-| Hugging Face HTTP | Download source |
+| Hugging Face HTTP | Download source (Range resume) |
+| ModelScope REST | Mirror upload (repo ensure / LFS batch / commit) |
+| Gitee AI git push | Mirror upload (the platform's documented git flow) |
 | Loopback fixture | Offline reproduction |
-| JSON manifest | SHA256 and byte counts |
+| JSON manifest | SHA256 and byte counts + mirrors |
 
 ## Limits and next steps
 
-- The demo hashes nine small metadata fixtures, not production weights. It performs no remote uploads.
-- init, sync and list are not implemented. Gitee AI and ModelScope mirroring remain roadmap items.
-- A newly computed digest records received bytes; it does not establish upstream authenticity or verify an expected digest. Use immutable revisions when reproducibility matters.
+- The demo hashes nine small metadata fixtures, not production weights; real mirror uploads need platform tokens.
+- Mirror upload ships in sync: ModelScope via its REST API (repo ensure, LFS batch, presigned PUT, commit); Gitee AI has no REST upload API, so hflock drives the git push flow from its official docs — large LFS pushes there require the operator's own gai / git-lfs setup.
+- Every run re-processes the full pin set (no delta sync); resume is per file (Range requests).
+- A newly computed digest records received bytes; it does not establish upstream authenticity — --check only diffs against a baseline manifest you retain. Use immutable revisions when reproducibility matters.
 
-Mirror uploads, lockfile generation and comparison against an existing trusted manifest are future work.
+More mirror platforms, delta sync, and signed (PGP/sigstore) provenance are future work.
 
 ## License and contributions
 
-See [LICENSE](./LICENSE). When reporting an issue, include a minimal input, the command, and the observed output.
+See [LICENSE](./LICENSE). Version history is in [CHANGELOG](./CHANGELOG.md). When reporting an issue, include a minimal input, the command, and the observed output.

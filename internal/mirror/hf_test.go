@@ -95,7 +95,7 @@ func TestListFiles_ExactNoGlob(t *testing.T) {
 
 func TestListFiles_GlobExpansion(t *testing.T) {
 	files := map[string]string{
-		"deepseek-ai/DeepSeek-V3/resolve/v3.0/config.json":            "{}",
+		"deepseek-ai/DeepSeek-V3/resolve/v3.0/config.json":             "{}",
 		"deepseek-ai/DeepSeek-V3/resolve/v3.0/model-00001.safetensors": "AAAA",
 		"deepseek-ai/DeepSeek-V3/resolve/v3.0/model-00002.safetensors": "BBBB",
 	}

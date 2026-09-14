@@ -84,8 +84,8 @@ func TestVerify_HappyPath(t *testing.T) {
 	tok := "tokenizer"
 	files := map[string]string{
 		"deepseek-ai/DeepSeek-V3/resolve/v3.0/config.json": cfg,
-		"Qwen/Qwen3-235B-A22B/resolve/main/config.json":      cfg,
-		"Qwen/Qwen3-235B-A22B/resolve/main/tokenizer.json":   tok,
+		"Qwen/Qwen3-235B-A22B/resolve/main/config.json":    cfg,
+		"Qwen/Qwen3-235B-A22B/resolve/main/tokenizer.json": tok,
 	}
 	src := fakeHF(t, files)
 	lock := &lockfile.WeightLock{Version: lockfile.Version, Weights: []lockfile.PinnedWeight{

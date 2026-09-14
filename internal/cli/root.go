@@ -23,12 +23,17 @@ import (
 // Hugging Face host and cache location without flags. The token envs feed
 // sync's mirror uploads.
 const (
-	envHFBase           = "HFLOCK_HF_BASE"
-	envWorkDir          = "HFLOCK_WORKDIR"
-	envGiteeToken       = "HFLOCK_GITEE_TOKEN"
-	envGiteeUser        = "HFLOCK_GITEE_USER"
-	envModelScopeToken  = "HFLOCK_MODELSCOPE_TOKEN"
+	envHFBase          = "HFLOCK_HF_BASE"
+	envWorkDir         = "HFLOCK_WORKDIR"
+	envGiteeToken      = "HFLOCK_GITEE_TOKEN"
+	envGiteeUser       = "HFLOCK_GITEE_USER"
+	envModelScopeToken = "HFLOCK_MODELSCOPE_TOKEN"
 )
+
+// Version is the hflock tool version, kept in lockstep with the VERSION file
+// and CHANGELOG.md (asserted by version_test.go). The lockfile schema version
+// (lockfile.Version) is a separate data contract and stays 0.1.0.
+const Version = "0.2.0"
 
 // NewRootCmd builds the hflock command tree.
 func NewRootCmd() *cobra.Command {
@@ -43,7 +48,9 @@ verify re-downloads and re-hashes the pin set (optionally diffing a trusted
 baseline via --check); sync additionally mirrors the files to the CN
 platforms; init generates a lockfile from an HF repo; list shows per-weight
 status.`,
+		Version: Version,
 	}
+	root.SetVersionTemplate("hflock {{.Version}}\n")
 	root.AddCommand(
 		newVerifyCmd(),
 		newInitCmd(),
@@ -369,7 +376,11 @@ unverified (list never fails on a missing manifest).`,
 				manifest = m
 			}
 
-			type status struct{ hashed int; mirrors []string; seen bool }
+			type status struct {
+				hashed  int
+				mirrors []string
+				seen    bool
+			}
 			byRepo := map[string]*status{}
 			if manifest != nil {
 				for _, e := range manifest.Entries {

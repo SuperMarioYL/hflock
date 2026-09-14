@@ -66,15 +66,15 @@ weights:
 func TestLoad_Errors(t *testing.T) {
 	dir := t.TempDir()
 	cases := map[string]string{
-		"missing file":        filepath.Join(dir, "nope.yaml"),
-		"bad yaml":            "version: 0.1.0\nweights: [oops\n",
-		"missing version":     "weights: []\n",
-		"wrong version":       "version: \"9.9.9\"\nweights: []\n",
-		"no weights":          "version: \"0.1.0\"\nweights: []\n",
-		"empty repo":          "version: \"0.1.0\"\nweights:\n  - revision: v\n    files: [a]\n",
-		"empty revision":      "version: \"0.1.0\"\nweights:\n  - repo: a/b\n    files: [a]\n",
-		"empty files":         "version: \"0.1.0\"\nweights:\n  - repo: a/b\n    revision: v\n",
-		"bad source":          "version: \"0.1.0\"\nweights:\n  - repo: a/b\n    revision: v\n    files: [a]\n    source: s3\n",
+		"missing file":    filepath.Join(dir, "nope.yaml"),
+		"bad yaml":        "version: 0.1.0\nweights: [oops\n",
+		"missing version": "weights: []\n",
+		"wrong version":   "version: \"9.9.9\"\nweights: []\n",
+		"no weights":      "version: \"0.1.0\"\nweights: []\n",
+		"empty repo":      "version: \"0.1.0\"\nweights:\n  - revision: v\n    files: [a]\n",
+		"empty revision":  "version: \"0.1.0\"\nweights:\n  - repo: a/b\n    files: [a]\n",
+		"empty files":     "version: \"0.1.0\"\nweights:\n  - repo: a/b\n    revision: v\n",
+		"bad source":      "version: \"0.1.0\"\nweights:\n  - repo: a/b\n    revision: v\n    files: [a]\n    source: s3\n",
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

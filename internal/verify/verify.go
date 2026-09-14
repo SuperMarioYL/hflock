@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -176,6 +177,45 @@ func resumeFrom(ctx context.Context, src mirror.Source, cachePath string, cached
 	default:
 		return Result{}, false, derr
 	}
+}
+
+// CheckManifest diffs a freshly computed manifest against a trusted baseline,
+// keyed by repo@revision/file. It reports hash and size mismatches, entries
+// missing from the fresh run, and entries not present in the baseline. An
+// empty result means the fresh run matches the baseline exactly — the state
+// the --check CI gate requires.
+func CheckManifest(baseline, fresh *lockfile.HashManifest) []string {
+	key := func(e lockfile.HashEntry) string {
+		return e.Repo + "@" + e.Revision + "/" + e.File
+	}
+	base := make(map[string]lockfile.HashEntry, len(baseline.Entries))
+	for _, e := range baseline.Entries {
+		base[key(e)] = e
+	}
+	got := make(map[string]lockfile.HashEntry, len(fresh.Entries))
+	for _, e := range fresh.Entries {
+		got[key(e)] = e
+	}
+	var diffs []string
+	for k, b := range base {
+		f, ok := got[k]
+		if !ok {
+			diffs = append(diffs, fmt.Sprintf("missing %s (in baseline, not re-downloaded)", k))
+			continue
+		}
+		if b.SHA256 != f.SHA256 {
+			diffs = append(diffs, fmt.Sprintf("hash mismatch %s: want %s got %s", k, b.SHA256, f.SHA256))
+		} else if b.Size != f.Size {
+			diffs = append(diffs, fmt.Sprintf("size mismatch %s: want %d got %d", k, b.Size, f.Size))
+		}
+	}
+	for k := range got {
+		if _, ok := base[k]; !ok {
+			diffs = append(diffs, fmt.Sprintf("unexpected %s (not in baseline)", k))
+		}
+	}
+	sort.Strings(diffs)
+	return diffs
 }
 
 // cachePath places each file under workdir/{repo}/{revision}/{file}, flattening

@@ -297,6 +297,42 @@ func contentRangeTotal(header string) (int64, bool) {
 	return n, true
 }
 
+// ListAll returns every file path under repo@revision (the full tree, all
+// pages). init uses it to build default pins and --all lockfiles.
+func (h *HFSource) ListAll(ctx context.Context, repo, revision string) ([]string, error) {
+	return h.listTree(ctx, repo, revision)
+}
+
+// ResolveRevision resolves a branch/tag ref to its commit sha via the HF
+// model-info API, so an init-generated lockfile pins an immutable revision.
+// Callers treat any failure as fail-soft (the ref itself is kept).
+func (h *HFSource) ResolveRevision(ctx context.Context, repo, revision string) (string, error) {
+	u := strings.TrimRight(h.baseURL(), "/") + "/" +
+		urlPath("api", "models", repo, "revision", revision)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := h.client().Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	var info struct {
+		Sha string `json:"sha"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return "", err
+	}
+	if info.Sha == "" {
+		return "", fmt.Errorf("no sha in revision info")
+	}
+	return info.Sha, nil
+}
+
 func (h *HFSource) baseURL() string {
 	if h.Base != "" {
 		return h.Base

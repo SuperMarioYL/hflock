@@ -7,13 +7,13 @@ package mirror
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/schollz/progressbar/v3"
@@ -22,24 +22,42 @@ import (
 // DefaultHFBase is the canonical Hugging Face host.
 const DefaultHFBase = "https://huggingface.co"
 
-// ErrMirrorNotImplemented marks a Target.Upload path that ships in m2. m1
-// performs zero mirror uploads; the Target types exist so m2 sync can wire them
-// without touching the lockfile/verify packages.
-var ErrMirrorNotImplemented = errors.New("mirror: upload not implemented in m1 (ships in m2 sync)")
+// RangeUnsatisfiable reports a 416 response to a Range request. Total and
+// HasTotal carry the server-advertised complete size parsed from the
+// Content-Range header when present ("bytes */1234").
+type RangeUnsatisfiable struct {
+	Total    int64
+	HasTotal bool
+}
+
+func (e *RangeUnsatisfiable) Error() string {
+	if e.HasTotal {
+		return fmt.Sprintf("range request not satisfiable (total %d bytes)", e.Total)
+	}
+	return "range request not satisfiable"
+}
 
 // Source downloads pinned weight files from a weight host.
 type Source interface {
 	// ListFiles returns the concrete file names under repo@revision matching
 	// the given patterns. Patterns without glob meta-characters are returned
 	// as-is (no network); glob patterns (e.g. "*.safetensors") are expanded
-	// against the host's file tree.
+	// against the host's file tree. A pattern that matches no files is an
+	// error — a silent empty expansion would defeat the gate.
 	ListFiles(ctx context.Context, repo, revision string, files []string) ([]string, error)
-	// Download fetches one file into dst, returning the bytes written.
-	Download(ctx context.Context, repo, revision, file string, dst io.Writer) (int64, error)
+	// Download streams the file's bytes into dst, returning the byte offset
+	// the delivered stream starts at and the number of bytes written. When
+	// from > 0 the source asks the server to skip the first `from` bytes
+	// (Range request): start == from means the range was honored (resume),
+	// while start == 0 means the server ignored the range and returned the
+	// whole file, so the caller must discard any partial data it held. A
+	// server that cannot satisfy the range returns *RangeUnsatisfiable.
+	Download(ctx context.Context, repo, revision, file string, from int64, dst io.Writer) (start, n int64, err error)
 }
 
-// Target uploads a mirrored file to a CN host and reports the provenance
-// identifier recorded in the hash manifest. Wired in m2 (mirror sync).
+// Target uploads mirrored files to a CN host and reports the provenance
+// identifier recorded in the hash manifest. Each implementation uses its
+// platform's documented upload mechanism.
 type Target interface {
 	// Name is the mirror id prefix recorded in HashEntry.Mirrors, e.g.
 	// "gitee-ai" or "modelscope".
@@ -48,8 +66,10 @@ type Target interface {
 	MirrorID(repo string) string
 	// RepoURL is the canonical human-facing mirror URL for a repo.
 	RepoURL(repo string) string
-	// Upload copies a local weight file to the mirror. m2.
-	Upload(ctx context.Context, repo, revision, file, srcPath string) error
+	// UploadRepo uploads files (repo-relative path -> local path) to the
+	// mirror repo as one batch, creating the mirror repo when the platform
+	// supports it.
+	UploadRepo(ctx context.Context, repo, revision string, files map[string]string) error
 }
 
 // HFSource downloads from huggingface.co. Base can be overridden (e.g. an
@@ -183,23 +203,49 @@ func nextLink(header, base string) string {
 }
 
 // Download fetches one file from {base}/{repo}/resolve/{revision}/{file} into
-// dst. When ShowBar is set and the host reports a content length, a progress
-// bar is layered over dst.
-func (h *HFSource) Download(ctx context.Context, repo, revision, file string, dst io.Writer) (int64, error) {
+// dst; see the Source interface for the from/start resume contract. When
+// ShowBar is set and the host reports a content length, a progress bar is
+// layered over dst.
+func (h *HFSource) Download(ctx context.Context, repo, revision, file string, from int64, dst io.Writer) (int64, int64, error) {
 	u := strings.TrimRight(h.baseURL(), "/") + "/" +
 		urlPath(repo, "resolve", revision, file)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
+	}
+	if from > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", from))
 	}
 	resp, err := h.client().Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("download %s: %w", file, err)
+		return 0, 0, fmt.Errorf("download %s: %w", file, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("download %s: HTTP %d", file, resp.StatusCode)
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// Whole-file body: either no range was requested or the server
+		// ignored it — the stream starts at byte 0 either way.
+		n, err := h.copyWithBar(resp, file, dst)
+		return 0, n, err
+	case http.StatusPartialContent:
+		start := from
+		if s, ok := contentRangeStart(resp.Header.Get("Content-Range")); ok {
+			start = s
+		}
+		n, err := h.copyWithBar(resp, file, dst)
+		return start, n, err
+	case http.StatusRequestedRangeNotSatisfiable:
+		total, ok := contentRangeTotal(resp.Header.Get("Content-Range"))
+		return 0, 0, &RangeUnsatisfiable{Total: total, HasTotal: ok}
+	default:
+		return 0, 0, fmt.Errorf("download %s: HTTP %d", file, resp.StatusCode)
 	}
+}
+
+// copyWithBar streams the response body into dst, adding a progress bar when
+// enabled and the host reports a content length.
+func (h *HFSource) copyWithBar(resp *http.Response, file string, dst io.Writer) (int64, error) {
 	w := dst
 	if h.ShowBar && resp.ContentLength > 0 {
 		bar := progressbar.NewOptions64(
@@ -213,6 +259,42 @@ func (h *HFSource) Download(ctx context.Context, repo, revision, file string, ds
 		w = io.MultiWriter(dst, bar)
 	}
 	return io.Copy(w, resp.Body)
+}
+
+// contentRangeStart parses the start offset from a Content-Range header of
+// the form "bytes 100-199/1200".
+func contentRangeStart(header string) (int64, bool) {
+	fields := strings.Fields(header)
+	if len(fields) != 2 || fields[0] != "bytes" {
+		return 0, false
+	}
+	dash := strings.IndexByte(fields[1], '-')
+	if dash <= 0 {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(fields[1][:dash], 10, 64)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// contentRangeTotal parses the total size from a Content-Range header of the
+// form "bytes 100-199/1200" or the 416 form "bytes */1200".
+func contentRangeTotal(header string) (int64, bool) {
+	fields := strings.Fields(header)
+	if len(fields) != 2 || fields[0] != "bytes" {
+		return 0, false
+	}
+	slash := strings.IndexByte(fields[1], '/')
+	if slash < 0 {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(fields[1][slash+1:], 10, 64)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 func (h *HFSource) baseURL() string {

@@ -7,9 +7,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SuperMarioYL/hflock/internal/lockfile"
 	"github.com/SuperMarioYL/hflock/internal/mirror"
@@ -164,5 +166,119 @@ func TestVerify_NilLockAndSource(t *testing.T) {
 	v2 := New(mirror.NewHFSource())
 	if _, err := v2.Verify(context.Background(), nil, "out.json"); err == nil {
 		t.Fatal("expected error on nil lock")
+	}
+}
+
+// rangeHF serves files with real HTTP Range semantics via http.ServeContent
+// (206 partial content, 416 with Content-Range "bytes */total"), matching how
+// HF's CDN answers Range requests.
+func rangeHF(t *testing.T, files map[string]string, sawRange *[]string) *mirror.HFSource {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if sawRange != nil {
+			*sawRange = append(*sawRange, r.Header.Get("Range"))
+		}
+		content, ok := files[strings.TrimPrefix(r.URL.Path, "/")]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		http.ServeContent(w, r, "blob", time.Time{}, strings.NewReader(content))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return &mirror.HFSource{Base: srv.URL, Client: srv.Client()}
+}
+
+const resumeBody = "0123456789"
+
+// prewrite places a partial (or complete) file at the exact cache path Fetch
+// uses, simulating a previous interrupted download.
+func prewrite(t *testing.T, workDir, repo, revision, file, content string) {
+	t.Helper()
+	p, err := cachePath(workDir, repo, revision, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFetch_ResumeAppendsRemainder(t *testing.T) {
+	var saw []string
+	src := rangeHF(t, map[string]string{"o/r/resolve/main/weights.bin": resumeBody}, &saw)
+	work := t.TempDir()
+	prewrite(t, work, "o/r", "main", "weights.bin", resumeBody[:5]) // interrupted at byte 5
+
+	res, err := Fetch(context.Background(), src, work, "o/r", "main", "weights.bin", true)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if res.SHA256 != sha256Hex(t, resumeBody) || res.Size != int64(len(resumeBody)) {
+		t.Fatalf("res = %+v, want full-content hash over %d bytes", res, len(resumeBody))
+	}
+	if len(saw) != 1 || saw[0] != "bytes=5-" {
+		t.Fatalf("range requests = %v, want a single bytes=5-", saw)
+	}
+}
+
+func TestFetch_ResumeServerIgnoresRange(t *testing.T) {
+	// a server that answers Range requests with the whole 200 body
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, resumeBody)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	src := &mirror.HFSource{Base: srv.URL, Client: srv.Client()}
+
+	work := t.TempDir()
+	prewrite(t, work, "o/r", "main", "weights.bin", resumeBody[:5])
+
+	res, err := Fetch(context.Background(), src, work, "o/r", "main", "weights.bin", true)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if res.SHA256 != sha256Hex(t, resumeBody) || res.Size != int64(len(resumeBody)) {
+		t.Fatalf("res = %+v — range-ignoring server must trigger a clean restart", res)
+	}
+}
+
+func TestFetch_ResumeAlreadyComplete(t *testing.T) {
+	var saw []string
+	src := rangeHF(t, map[string]string{"o/r/resolve/main/weights.bin": resumeBody}, &saw)
+	work := t.TempDir()
+	prewrite(t, work, "o/r", "main", "weights.bin", resumeBody) // complete cache
+
+	res, err := Fetch(context.Background(), src, work, "o/r", "main", "weights.bin", true)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if res.SHA256 != sha256Hex(t, resumeBody) || res.Size != int64(len(resumeBody)) {
+		t.Fatalf("res = %+v", res)
+	}
+	// the server must have answered exactly one 416 (bytes=10- is
+	// unsatisfiable for a 10-byte file) — no body bytes were re-downloaded
+	if len(saw) != 1 || saw[0] != "bytes=10-" {
+		t.Fatalf("range requests = %v, want a single bytes=10-", saw)
+	}
+}
+
+func TestFetch_FreshTruncatesStaleCache(t *testing.T) {
+	src := fakeHF(t, map[string]string{"o/r/resolve/main/weights.bin": resumeBody})
+	work := t.TempDir()
+	prewrite(t, work, "o/r", "main", "weights.bin", "XXXXX") // stale cache
+
+	res, err := Fetch(context.Background(), src, work, "o/r", "main", "weights.bin", false)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if res.SHA256 != sha256Hex(t, resumeBody) || res.Size != int64(len(resumeBody)) {
+		t.Fatalf("res = %+v — fresh fetch must not trust stale cache", res)
 	}
 }

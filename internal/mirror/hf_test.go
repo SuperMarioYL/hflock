@@ -2,7 +2,6 @@ package mirror
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -214,52 +213,23 @@ func TestDownload_OK(t *testing.T) {
 	files := map[string]string{"deepseek-ai/DeepSeek-V3/resolve/v3.0/config.json": "hello-world"}
 	_, src := newFakeHF(t, files)
 	var buf strings.Builder
-	n, err := src.Download(context.Background(), "deepseek-ai/DeepSeek-V3", "v3.0", "config.json", &buf)
+	start, n, err := src.Download(context.Background(), "deepseek-ai/DeepSeek-V3", "v3.0", "config.json", 0, &buf)
 	if err != nil {
 		t.Fatalf("Download: %v", err)
 	}
 	if buf.String() != "hello-world" {
 		t.Fatalf("body = %q", buf.String())
 	}
-	if n != int64(len("hello-world")) {
-		t.Fatalf("n = %d", n)
+	if n != int64(len("hello-world")) || start != 0 {
+		t.Fatalf("start = %d, n = %d", start, n)
 	}
 }
 
 func TestDownload_404(t *testing.T) {
 	_, src := newFakeHF(t, map[string]string{})
 	var buf strings.Builder
-	_, err := src.Download(context.Background(), "deepseek-ai/DeepSeek-V3", "v3.0", "nope.json", &buf)
+	_, _, err := src.Download(context.Background(), "deepseek-ai/DeepSeek-V3", "v3.0", "nope.json", 0, &buf)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatalf("err = %v, want HTTP 404", err)
-	}
-}
-
-func TestGiteeTarget_MetadataAndM2Stub(t *testing.T) {
-	g := &GiteeTarget{}
-	if g.Name() != "gitee-ai" {
-		t.Fatalf("name = %q", g.Name())
-	}
-	if g.MirrorID("deepseek-ai/DeepSeek-V3") != "gitee-ai:deepseek-ai/DeepSeek-V3" {
-		t.Fatalf("mirrorid = %q", g.MirrorID("deepseek-ai/DeepSeek-V3"))
-	}
-	if g.RepoURL("deepseek-ai/DeepSeek-V3") != DefaultGiteeBase+"/deepseek-ai/DeepSeek-V3" {
-		t.Fatalf("repo url = %q", g.RepoURL("deepseek-ai/DeepSeek-V3"))
-	}
-	if err := g.Upload(context.Background(), "", "", "", ""); !errors.Is(err, ErrMirrorNotImplemented) {
-		t.Fatalf("upload err = %v, want ErrMirrorNotImplemented", err)
-	}
-}
-
-func TestModelScopeTarget_MetadataAndM2Stub(t *testing.T) {
-	m := &ModelScopeTarget{}
-	if m.Name() != "modelscope" {
-		t.Fatalf("name = %q", m.Name())
-	}
-	if m.RepoURL("deepseek-ai/DeepSeek-V3") != DefaultModelScopeBase+"/models/deepseek-ai/DeepSeek-V3" {
-		t.Fatalf("repo url = %q", m.RepoURL("deepseek-ai/DeepSeek-V3"))
-	}
-	if err := m.Upload(context.Background(), "", "", "", ""); !errors.Is(err, ErrMirrorNotImplemented) {
-		t.Fatalf("upload err = %v, want ErrMirrorNotImplemented", err)
 	}
 }

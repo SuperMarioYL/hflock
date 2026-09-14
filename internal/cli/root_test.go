@@ -59,7 +59,7 @@ weights:
 }
 
 func TestStubCommands(t *testing.T) {
-	for _, c := range []string{"sync", "init", "list"} {
+	for _, c := range []string{"init", "list"} {
 		root := NewRootCmd()
 		root.SetArgs([]string{c})
 		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "ships in milestone") {
@@ -104,5 +104,65 @@ weights:
 	}
 	if _, statErr := os.Stat(manifest); statErr == nil {
 		t.Fatalf("no manifest must be written on a failed verify")
+	}
+}
+
+// sync end-to-end through the real CLI: fixture HF source + mock ModelScope
+// target (small non-LFS pin so the flow is ensure-repo + commit).
+func TestSyncCmd_EndToEnd(t *testing.T) {
+	hf := fakeHF(t, `{"k":1}`) // serves any /resolve/ path with this body
+	ms := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/models/"):
+			io.WriteString(w, `{"Code":200,"Data":{}}`)
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/commit/"):
+			io.WriteString(w, `{"Code":200,"Data":{"CommitId":"c"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ms.Close)
+
+	work := t.TempDir()
+	lockPath := filepath.Join(work, "weights.lock.yaml")
+	if err := os.WriteFile(lockPath, []byte(`version: "0.1.0"
+weights:
+  - repo: o/r
+    revision: main
+    files: ["config.json"]
+`), 0o644); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+	manifest := filepath.Join(work, "manifest.json")
+
+	root := NewRootCmd()
+	root.SetArgs([]string{
+		"sync", lockPath,
+		"--hf-base", hf,
+		"--workdir", work,
+		"--manifest", manifest,
+		"--mirrors", "modelscope",
+		"--modelscope-base", ms.URL,
+		"--modelscope-token", "t",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	b, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatalf("manifest not written: %v", err)
+	}
+	if !strings.Contains(string(b), `"modelscope:o/r"`) {
+		t.Fatalf("manifest missing mirror record:\n%s", b)
+	}
+}
+
+func TestSyncCmd_UnknownMirrorRejected(t *testing.T) {
+	root := NewRootCmd()
+	root.SetArgs([]string{"sync", "whatever.yaml", "--mirrors", "baidu-pan"})
+	err := root.Execute()
+	// the unknown-mirror error must surface before the lockfile is even read
+	if err == nil || !strings.Contains(err.Error(), "unknown mirror") {
+		t.Fatalf("err = %v, want unknown-mirror error", err)
 	}
 }

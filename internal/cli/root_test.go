@@ -67,3 +67,42 @@ func TestStubCommands(t *testing.T) {
 		}
 	}
 }
+
+// Regression test for the v0.1.0 defect where `hflock verify` exited 0 and
+// wrote a 0-entry manifest when a pinned glob matched nothing — the CI
+// air-gap gate verified nothing and still passed.
+func TestVerifyCmd_GlobNoMatchFails(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/tree/") {
+			// repo contains only config.json — nothing matches *.safetensors
+			io.WriteString(w, `[{"type":"file","path":"config.json","size":2}]`)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	work := t.TempDir()
+	lockPath := filepath.Join(work, "weights.lock.yaml")
+	if err := os.WriteFile(lockPath, []byte(`version: "0.1.0"
+weights:
+  - repo: o/r
+    revision: main
+    files: ["*.safetensors"]
+`), 0o644); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+	manifest := filepath.Join(work, "manifest.json")
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"verify", lockPath, "--hf-base", srv.URL, "--workdir", work, "--manifest", manifest})
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "matched no files") {
+		t.Fatalf("err = %v, want 'matched no files'", err)
+	}
+	if _, statErr := os.Stat(manifest); statErr == nil {
+		t.Fatalf("no manifest must be written on a failed verify")
+	}
+}

@@ -93,10 +93,19 @@ func (h *HFSource) ListFiles(ctx context.Context, repo, revision string, files [
 		return nil, fmt.Errorf("list tree %s@%s: %w", repo, revision, err)
 	}
 	for _, p := range patterns {
+		matched := 0
 		for _, f := range all {
 			if ok, _ := path.Match(p, f); ok {
 				out = append(out, f)
+				matched++
 			}
+		}
+		// A pattern that matches nothing must fail the run: a silent empty
+		// expansion would turn the CI gate into a no-op that verifies
+		// nothing and still exits 0 (exact names already fail loudly via a
+		// download 404).
+		if matched == 0 {
+			return nil, fmt.Errorf("pattern %q matched no files in %s@%s (check the pattern or revision)", p, repo, revision)
 		}
 	}
 	return dedupe(out), nil

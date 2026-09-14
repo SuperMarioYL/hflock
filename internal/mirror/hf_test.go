@@ -186,6 +186,30 @@ func TestListFiles_MixedExactAndGlob(t *testing.T) {
 	}
 }
 
+// Regression test for the v0.1.0 defect where a glob matching zero files
+// returned an empty slice with no error — verify then exited 0 and wrote an
+// empty manifest, so a typo'd pattern silently disabled the CI gate.
+func TestListFiles_GlobNoMatchFails(t *testing.T) {
+	files := map[string]string{
+		"deepseek-ai/DeepSeek-V3/resolve/v3.0/config.json": "C",
+	}
+	_, src := newFakeHF(t, files)
+	_, err := src.ListFiles(context.Background(), "deepseek-ai/DeepSeek-V3", "v3.0",
+		[]string{"*.safetenors"}) // typo'd pattern
+	if err == nil || !strings.Contains(err.Error(), "matched no files") {
+		t.Fatalf("err = %v, want 'matched no files' naming the pattern", err)
+	}
+	if !strings.Contains(err.Error(), "*.safetenors") || !strings.Contains(err.Error(), "deepseek-ai/DeepSeek-V3@v3.0") {
+		t.Fatalf("error must name pattern and repo@revision: %v", err)
+	}
+	// a matching pattern in the same lockfile still succeeds (exact + glob mix)
+	got, err := src.ListFiles(context.Background(), "deepseek-ai/DeepSeek-V3", "v3.0",
+		[]string{"config.json", "*.json"})
+	if err != nil || len(got) != 1 || got[0] != "config.json" {
+		t.Fatalf("got %v, err %v", got, err)
+	}
+}
+
 func TestDownload_OK(t *testing.T) {
 	files := map[string]string{"deepseek-ai/DeepSeek-V3/resolve/v3.0/config.json": "hello-world"}
 	_, src := newFakeHF(t, files)

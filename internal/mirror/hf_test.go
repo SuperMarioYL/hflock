@@ -3,6 +3,7 @@ package mirror
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -112,6 +113,59 @@ func TestListFiles_GlobExpansion(t *testing.T) {
 		if !strings.HasSuffix(g, ".safetensors") {
 			t.Fatalf("non-safetensors returned: %q", g)
 		}
+	}
+}
+
+// The real HF tree API paginates via Link rel="next" (default page size 1000);
+// large sharded repos span multiple pages. Regression test for the v0.1.0
+// defect where listTree read only the first page and silently dropped the
+// rest — a "*.safetensors" pin then mirrored/hashed only page-1 shards.
+func TestListFiles_PaginationFollowsLinkNext(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/models/o/r/tree/main", func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("page") {
+		case "":
+			w.Header().Set("Link", fmt.Sprintf(`<http://%s/api/models/o/r/tree/main?recursive=true&page=2>; rel="next"`, r.Host))
+			w.Write([]byte(`[{"type":"file","path":"config.json","size":2},{"type":"file","path":"model-00001.safetensors","size":4}]`))
+		case "2":
+			w.Header().Set("Link", fmt.Sprintf(`<http://%s/api/models/o/r/tree/main?recursive=true&page=3>; rel="next"`, r.Host))
+			w.Write([]byte(`[{"type":"directory","path":"subdir"},{"type":"file","path":"model-00002.safetensors","size":4}]`))
+		default: // page 3, no next — also exercises a relative Link target
+			w.Header().Set("Link", `</api/models/o/r/tree/main?recursive=true&page=99>; rel="prev"`)
+			w.Write([]byte(`[{"type":"file","path":"model-00003.safetensors","size":4}]`))
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	src := &HFSource{Base: srv.URL, Client: srv.Client()}
+
+	got, err := src.ListFiles(context.Background(), "o/r", "main", []string{"*.safetensors"})
+	if err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	}
+	want := []string{"model-00001.safetensors", "model-00002.safetensors", "model-00003.safetensors"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v — files past page 1 must not be silently dropped", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
+// nextLink must resolve relative rel="next" targets against the page URL.
+func TestNextLink_RelativeTarget(t *testing.T) {
+	got := nextLink(`</api/models/o/r/tree/main?page=2>; rel="next", </api/models/o/r/tree/main>; rel="first"`,
+		"https://huggingface.co/api/models/o/r/tree/main?recursive=true")
+	if got != "https://huggingface.co/api/models/o/r/tree/main?page=2" {
+		t.Fatalf("nextLink = %q", got)
+	}
+	if nextLink(`</x>; rel="prev"`, "https://h") != "" {
+		t.Fatalf("rel=prev must not be followed")
+	}
+	if nextLink("", "https://h") != "" {
+		t.Fatalf("empty header must yield empty next")
 	}
 }
 

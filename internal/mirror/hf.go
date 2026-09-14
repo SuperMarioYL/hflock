@@ -103,36 +103,74 @@ func (h *HFSource) ListFiles(ctx context.Context, repo, revision string, files [
 }
 
 // listTree calls the HF tree API and returns the file paths (directories
-// excluded).
+// excluded). The tree API paginates via the Link response header (rel="next",
+// default page size 1000 entries), so every page is followed — a single-page
+// read would silently truncate glob expansion on large sharded repos and the
+// hash manifest would omit the files past page 1.
 func (h *HFSource) listTree(ctx context.Context, repo, revision string) ([]string, error) {
 	u := strings.TrimRight(h.baseURL(), "/") + "/" +
 		urlPath("api", "models", repo, "tree", revision) + "?recursive=true"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := h.client().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	var entries []hfTreeEntry
-	if err := json.NewDecoder(resp.Body).Decode(&entries); err != nil {
-		return nil, err
-	}
-	files := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if e.Type == "directory" {
-			continue
+	var files []string
+	seen := make(map[string]bool)
+	for u != "" {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, err
 		}
-		if e.Path != "" {
+		resp, err := h.client().Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		}
+		var entries []hfTreeEntry
+		err = json.NewDecoder(resp.Body).Decode(&entries)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			if e.Type == "directory" || e.Path == "" || seen[e.Path] {
+				continue
+			}
+			seen[e.Path] = true
 			files = append(files, e.Path)
 		}
+		u = nextLink(resp.Header.Get("Link"), u)
 	}
 	return files, nil
+}
+
+// nextLink extracts the rel="next" target from an RFC 8288 Link header
+// ("</api/models/o/r/tree/main?page=2>; rel=\"next\""), resolving relative
+// targets against the URL they came from. Empty string when no next page.
+func nextLink(header, base string) string {
+	for _, part := range strings.Split(header, ",") {
+		lt := strings.Index(part, "<")
+		gt := strings.Index(part, ">")
+		if lt < 0 || gt <= lt {
+			continue
+		}
+		raw := strings.TrimSpace(part[lt+1 : gt])
+		params := part[gt+1:]
+		if !strings.Contains(params, `rel="next"`) && !strings.Contains(params, "rel=next") {
+			continue
+		}
+		target, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		if target.IsAbs() {
+			return target.String()
+		}
+		if b, err := url.Parse(base); err == nil {
+			return b.ResolveReference(target).String()
+		}
+		return raw
+	}
+	return ""
 }
 
 // Download fetches one file from {base}/{repo}/resolve/{revision}/{file} into

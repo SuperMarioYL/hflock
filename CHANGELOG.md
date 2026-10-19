@@ -6,6 +6,32 @@ All notable changes to hflock are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-20
+
+### Fixed
+
+- Cache paths are now collision-free: each of repo, revision and file is
+  split into path atoms that are sanitized separately, so subdirectory files
+  keep real subdirectories and a flat name like `sub_model.bin` can no longer
+  share a cache file with `sub/model.bin`. Previously the flattened cache
+  paths collided, the mirror received one pinned file's bytes under the
+  other's name, and the manifest recorded both as verified.
+- Gitee AI sync recovers from an interrupted first clone: a clone directory
+  left behind without `.git` (killed process, OOM, sleep during a long push)
+  is cleared and re-cloned instead of failing every later run with
+  "destination path already exists". Repo ids that would place the clone
+  outside the clone root are refused outright.
+- `hflock list` keys status by repo@revision (the same key the `--check`
+  gate diffs on). Previously a manifest still holding the old revision's
+  entries marked a newly pinned revision verified, and two weights pinning
+  different revisions of one repo merged their hash counts and mirrors.
+
+### Changed
+
+- `hflock sync` validates the `gitee-ai` target up front: on a machine
+  without git in PATH the run now fails before any download starts instead
+  of after the full weight download.
+
 ## [0.2.0] - 2026-09-15
 
 ### Fixed
@@ -43,6 +69,7 @@ All notable changes to hflock are documented here. The format follows
   verifier: `hflock verify` downloads pinned weights from Hugging Face and
   emits `weights.lock.manifest.json`.
 
-[Unreleased]: https://github.com/SuperMarioYL/hflock/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/SuperMarioYL/hflock/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/SuperMarioYL/hflock/releases/tag/v0.3.0
 [0.2.0]: https://github.com/SuperMarioYL/hflock/releases/tag/v0.2.0
 [0.1.0]: https://github.com/SuperMarioYL/hflock/releases/tag/v0.1.0

@@ -230,3 +230,63 @@ func TestSyncRun_UploadFailureFails(t *testing.T) {
 		t.Fatalf("err = %v, want upload failure naming repo and target", err)
 	}
 }
+
+// recordingTarget captures the bytes a mirror would receive, per repo-relative
+// path — the observable half of the cache-collision defect.
+type recordingTarget struct {
+	got map[string][]byte
+}
+
+func (r *recordingTarget) Name() string                { return "recording" }
+func (r *recordingTarget) MirrorID(repo string) string { return "recording:" + repo }
+func (r *recordingTarget) RepoURL(repo string) string  { return "recording:" + repo }
+func (r *recordingTarget) UploadRepo(ctx context.Context, repo, revision string, files map[string]string) error {
+	for rel, local := range files {
+		b, err := os.ReadFile(local)
+		if err != nil {
+			return err
+		}
+		r.got[repo+"/"+rel] = b
+	}
+	return nil
+}
+
+// Regression test for the v0.2.0 cache-path collision: cachePath flattened
+// "/" to "_", so "sub/model.bin" and "sub_model.bin" shared one cache file and
+// the mirror received one file's bytes under the other's name while the
+// manifest recorded both as verified. Each pin must now keep its own bytes.
+func TestSyncRun_CachePathCollisionUploadsCorrectBytes(t *testing.T) {
+	subContent := "SUBDIR-BYTES-0000000000000000000000000000"
+	flatContent := "FLAT-BYTES-111111111111111111111111111111"
+	files := map[string]string{
+		"o/r/resolve/main/sub/model.bin": subContent,
+		"o/r/resolve/main/sub_model.bin": flatContent,
+	}
+	src := fakeHF(t, files)
+	work := t.TempDir()
+	lock := &lockfile.WeightLock{Version: lockfile.Version, Weights: []lockfile.PinnedWeight{
+		{Repo: "o/r", Revision: "main", Files: []string{"sub/model.bin", "sub_model.bin"}},
+	}}
+	rec := &recordingTarget{got: map[string][]byte{}}
+	r := Runner{Source: src, Targets: []mirror.Target{rec}, WorkDir: work, Concurrency: 1}
+	m, err := r.Run(context.Background(), lock, filepath.Join(work, "manifest.json"))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	byFile := map[string]lockfile.HashEntry{}
+	for _, e := range m.Entries {
+		byFile[e.File] = e
+	}
+	if e := byFile["sub/model.bin"]; e.SHA256 != sha256Hex(subContent) {
+		t.Fatalf("manifest sha for sub/model.bin = %s, want its own content's hash", e.SHA256)
+	}
+	if e := byFile["sub_model.bin"]; e.SHA256 != sha256Hex(flatContent) {
+		t.Fatalf("manifest sha for sub_model.bin = %s, want its own content's hash", e.SHA256)
+	}
+	if got := string(rec.got["o/r/sub/model.bin"]); got != subContent {
+		t.Fatalf("mirror received wrong bytes for sub/model.bin: %q", got)
+	}
+	if got := string(rec.got["o/r/sub_model.bin"]); got != flatContent {
+		t.Fatalf("mirror received wrong bytes for sub_model.bin: %q", got)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -395,5 +396,80 @@ func TestSyncCmd_UnknownMirrorRejected(t *testing.T) {
 	// the unknown-mirror error must surface before the lockfile is even read
 	if err == nil || !strings.Contains(err.Error(), "unknown mirror") {
 		t.Fatalf("err = %v, want unknown-mirror error", err)
+	}
+}
+
+// Regression test for the v0.2.0 defect where list aggregated status by repo
+// alone: a manifest still holding the old revision's entries marked a new
+// revision verified, and two weights pinning different revisions of one repo
+// merged their hash counts and mirrors.
+func TestListCmd_StatusKeyedByRevision(t *testing.T) {
+	dir := t.TempDir()
+	lockPath := filepath.Join(dir, "weights.lock.yaml")
+	if err := os.WriteFile(lockPath, []byte(`version: "0.1.0"
+weights:
+  - repo: o/r
+    revision: v1
+    files: ["config.json"]
+  - repo: o/r
+    revision: v2
+    files: ["config.json"]
+`), 0o644); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+	// the manifest only covers the OLD revision v1
+	manifest := filepath.Join(dir, "manifest.json")
+	m := lockfile.HashManifest{LockVersion: lockfile.Version, Entries: []lockfile.HashEntry{
+		{Repo: "o/r", Revision: "v1", File: "config.json", SHA256: "abc", Size: 2,
+			Mirrors: []string{"gitee-ai:o/r"}},
+	}}
+	if err := lockfile.WriteManifest(manifest, &m); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf strings.Builder
+	root := NewRootCmd()
+	root.SetOut(&buf)
+	root.SetArgs([]string{"list", lockPath, "--manifest", manifest})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var v1Line, v2Line string
+	for _, line := range strings.Split(buf.String(), "\n") {
+		// tabwriter pads columns with spaces, so match on content, not tabs
+		switch {
+		case strings.Contains(line, "o/r") && strings.Contains(line, " v1 "):
+			v1Line = line
+		case strings.Contains(line, "o/r") && strings.Contains(line, " v2 "):
+			v2Line = line
+		}
+	}
+	if !strings.Contains(v1Line, "gitee-ai:o/r") || strings.Contains(v1Line, "unverified") {
+		t.Fatalf("v1 row = %q, want verified with mirrors", v1Line)
+	}
+	if !strings.Contains(v2Line, "unverified") || strings.Contains(v2Line, "gitee-ai") {
+		t.Fatalf("v2 row = %q, want unverified without merged status from v1", v2Line)
+	}
+}
+
+// Regression test for the v0.2.0 behavior where a git-less machine got the
+// gitee-ai "git not found" error only after the full (possibly multi-GB)
+// download: buildTargets must reject the gitee-ai target up front.
+func TestBuildTargets_GiteeRequiresGitUpFront(t *testing.T) {
+	t.Setenv("PATH", "")
+	_, err := buildTargets("gitee-ai,modelscope", "", "", "", "", "", "")
+	if err == nil || !strings.Contains(err.Error(), "git not found") {
+		t.Fatalf("err = %v, want the gitee-ai git-not-found error before any download", err)
+	}
+	// a PATH with git still builds the target
+	t.Setenv("PATH", os.Getenv("HOME")+"/bin:"+"/usr/bin:/bin:/usr/sbin:/sbin")
+	if _, err := exec.LookPath("git"); err == nil {
+		targets, err := buildTargets("gitee-ai", "", "", "", "", "", "")
+		if err != nil {
+			t.Fatalf("buildTargets with git available: %v", err)
+		}
+		if len(targets) != 1 || targets[0].Name() != "gitee-ai" {
+			t.Fatalf("targets = %v", targets)
+		}
 	}
 }

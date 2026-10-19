@@ -218,14 +218,29 @@ func CheckManifest(baseline, fresh *lockfile.HashManifest) []string {
 	return diffs
 }
 
-// cachePath places each file under workdir/{repo}/{revision}/{file}, flattening
-// slashes in repo/revision/file atoms so a pinned path can't escape the cache.
+// cachePath places each file under workdir/{repo}/{revision}/{file}. Each of
+// the three fields is split on "/" into path atoms, and every atom is
+// sanitized separately: subdirectories stay real subdirectories, and a flat
+// name like "a_b" can never collide with the nested layout of "a/b". The
+// previous whole-field flatten mapped sanitize("a/b") and sanitize("a_b") to
+// the same cache file, so the mirror received one pinned file's bytes under
+// the other's name while the manifest recorded both as verified. A sanitized
+// atom can never contain a separator, so a pinned path can never escape the
+// cache root.
 func cachePath(workDir, repo, revision, file string) (string, error) {
 	dir := workDir
 	if dir == "" {
 		dir = os.TempDir()
 	}
-	return filepath.Join(dir, sanitize(repo), sanitize(revision), sanitize(file)), nil
+	atoms := []string{dir}
+	for _, field := range []string{repo, revision, file} {
+		for _, part := range strings.Split(field, "/") {
+			if part = sanitize(part); part != "" {
+				atoms = append(atoms, part)
+			}
+		}
+	}
+	return filepath.Join(atoms...), nil
 }
 
 // sanitize replaces path separators so a malicious pinned name can never

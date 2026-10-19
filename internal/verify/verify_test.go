@@ -282,3 +282,63 @@ func TestFetch_FreshTruncatesStaleCache(t *testing.T) {
 		t.Fatalf("res = %+v — fresh fetch must not trust stale cache", res)
 	}
 }
+
+// Regression test for the v0.2.0 defect where cachePath flattened "/" to "_",
+// so two different pinned files ("sub/model.bin" and "sub_model.bin") shared
+// one cache file: the mirror received one file's bytes under the other's name
+// while the manifest recorded both as verified. Distinct (repo, revision,
+// file) triples must map to distinct cache paths.
+func TestCachePath_DistinctFilesDistinctPaths(t *testing.T) {
+	cases := [][3]string{
+		{"o/r", "main", "sub/model.bin"},
+		{"o/r", "main", "sub_model.bin"},
+		{"o/r", "main", "model.bin"},
+		{"o_r", "main", "model.bin"}, // a repo id that flattens identically must not collide either
+		{"o/r", "dev/foo", "model.bin"},
+		{"o/r", "dev_foo", "model.bin"}, // a branch id that flattens identically
+	}
+	seen := map[string][3]string{}
+	for _, c := range cases {
+		p, err := cachePath(t.TempDir(), c[0], c[1], c[2])
+		if err != nil {
+			t.Fatalf("cachePath(%v): %v", c, err)
+		}
+		p = filepath.Base(p) + "|" + filepath.Base(filepath.Dir(p)) + "|" + filepath.Base(filepath.Dir(filepath.Dir(p)))
+		if prev, dup := seen[p]; dup {
+			t.Fatalf("cache collision: %v and %v both map to %q", prev, c, p)
+		}
+		seen[p] = c
+	}
+	// subdirectories stay real directories: "sub/model.bin" is nested, not flattened
+	p, err := cachePath("w", "o/r", "main", "sub/model.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(filepath.ToSlash(p), "w/o/r/main/sub/model.bin") {
+		t.Fatalf("cachePath(sub/model.bin) = %q, want a nested sub/ directory", p)
+	}
+}
+
+// End-to-end guard for the same defect: two pins whose old flat cache paths
+// collided must hash and (via a recording target) upload their own bytes.
+func TestFetch_CollidingNamesStayIndependent(t *testing.T) {
+	subBody := "SUBDIR-CONTENT-0000000000000000000000"
+	flatBody := "FLAT-CONTENT-111111111111111111111111"
+	src := fakeHF(t, map[string]string{
+		"o/r/resolve/main/sub/model.bin": subBody,
+		"o/r/resolve/main/sub_model.bin": flatBody,
+	})
+	work := t.TempDir()
+	for _, c := range []struct {
+		file string
+		want string
+	}{{"sub/model.bin", subBody}, {"sub_model.bin", flatBody}} {
+		res, err := Fetch(context.Background(), src, work, "o/r", "main", c.file, true)
+		if err != nil {
+			t.Fatalf("Fetch %s: %v", c.file, err)
+		}
+		if res.SHA256 != sha256Hex(t, c.want) {
+			t.Fatalf("Fetch %s sha = %s, want hash of its own bytes", c.file, res.SHA256)
+		}
+	}
+}

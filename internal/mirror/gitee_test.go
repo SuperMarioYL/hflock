@@ -114,3 +114,68 @@ func TestGitee_RedactStripsToken(t *testing.T) {
 		t.Fatalf("remoteURL = %q", g.remoteURL("o/r"))
 	}
 }
+
+// Regression test for the v0.2.0 defect where a first clone interrupted after
+// git had created the target directory (kill -9, OOM, sleep) left a directory
+// without .git behind; every later sync then failed with "destination path
+// already exists and is not an empty directory" until a manual rm -rf.
+func TestGitee_StaleCloneDirRecovered(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not in PATH")
+	}
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "o"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bare := filepath.Join(base, "o", "r.git")
+	runGit(t, base, "init", "--bare", bare)
+
+	cloneRoot := filepath.Join(t.TempDir(), "clones")
+	g := &GiteeTarget{Base: base, CloneRoot: cloneRoot}
+
+	// simulate the killed first clone: a directory with junk, no .git
+	stale := filepath.Join(cloneRoot, "o_r")
+	if err := os.MkdirAll(stale, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "partial.tmp"), []byte("junk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	src := writeFileT(t, filepath.Join(t.TempDir(), "config.json"), `{"k":1}`)
+	if err := g.UploadRepo(context.Background(), "o/r", "v1", map[string]string{"config.json": src}); err != nil {
+		t.Fatalf("UploadRepo must recover from a stale clone dir: %v", err)
+	}
+	workspace := t.TempDir()
+	verify := filepath.Join(workspace, "verify")
+	runGit(t, workspace, "clone", bare, verify)
+	got, err := os.ReadFile(filepath.Join(verify, "config.json"))
+	if err != nil || string(got) != `{"k":1}` {
+		t.Fatalf("pushed bytes = %q err %v", got, err)
+	}
+	// the stale directory was replaced by a real clone
+	if _, err := os.Stat(filepath.Join(stale, ".git")); err != nil {
+		t.Fatalf("clone dir has no .git after recovery: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stale, "partial.tmp")); err == nil {
+		t.Fatalf("stale junk file still present — the directory was not cleared")
+	}
+}
+
+// The stale-clone cleanup must never delete outside the clone root: a repo id
+// whose sanitized form is "." or ".." is refused outright.
+func TestGitee_UnsafeRepoIdRejected(t *testing.T) {
+	g := &GiteeTarget{CloneRoot: t.TempDir()}
+	// separator flattening makes any embedded ".." inert (e.g. "a/../.." becomes
+	// "a_.._.." inside the clone root); only the exact forms are dangerous
+	for _, repo := range []string{"..", "."} {
+		err := g.UploadRepo(context.Background(), repo, "", map[string]string{"f": "/tmp/x"})
+		if err == nil || !strings.Contains(err.Error(), "refusing unsafe repo id") {
+			t.Fatalf("repo %q: err = %v, want unsafe-repo-id rejection", repo, err)
+		}
+	}
+	// nothing outside the clone root was touched
+	if _, err := os.Stat(g.cloneRoot()); err != nil {
+		t.Fatalf("clone root disturbed: %v", err)
+	}
+}

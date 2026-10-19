@@ -49,8 +49,20 @@ func (g *GiteeTarget) UploadRepo(ctx context.Context, repo, revision string, fil
 	if _, err := exec.LookPath("git"); err != nil {
 		return fmt.Errorf("gitee-ai: git not found in PATH — git push is the platform's documented upload mechanism (https://ai.gitee.com/docs/products/models/upload)")
 	}
-	cloneDir := filepath.Join(g.cloneRoot(), sanitizeRepo(repo))
+	name, err := cloneDirName(repo)
+	if err != nil {
+		return err
+	}
+	cloneDir := filepath.Join(g.cloneRoot(), name)
 	if _, err := os.Stat(filepath.Join(cloneDir, ".git")); err != nil {
+		// A directory without .git is the half-finished leftover of an
+		// interrupted first clone (multi-GB weight pushes run long enough to
+		// be killed by OOM, sleep or SIGKILL). git clone refuses to reuse it
+		// ("destination path already exists"), wedging every later sync until
+		// a manual rm -rf — clear the stale directory and clone fresh.
+		if err := os.RemoveAll(cloneDir); err != nil {
+			return fmt.Errorf("gitee-ai: clear stale clone dir: %w", err)
+		}
 		if err := os.MkdirAll(filepath.Dir(cloneDir), 0o755); err != nil {
 			return fmt.Errorf("gitee-ai: create clone dir: %w", err)
 		}
@@ -148,6 +160,17 @@ func (g *GiteeTarget) cloneRoot() string {
 // escape the clone root.
 func sanitizeRepo(repo string) string {
 	return strings.NewReplacer("/", "_", "\\", "_").Replace(repo)
+}
+
+// cloneDirName maps a repo id to its clone directory name, refusing ids whose
+// sanitized form would land outside or on the clone root itself ("." and
+// ".." survive separator flattening and must never be removed or cloned into).
+func cloneDirName(repo string) (string, error) {
+	name := sanitizeRepo(repo)
+	if name == "" || name == "." || name == ".." {
+		return "", fmt.Errorf("gitee-ai: refusing unsafe repo id %q", repo)
+	}
+	return name, nil
 }
 
 func copyFileToLocal(src, dst string) error {

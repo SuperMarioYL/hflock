@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -33,7 +34,7 @@ const (
 // Version is the hflock tool version, kept in lockstep with the VERSION file
 // and CHANGELOG.md (asserted by version_test.go). The lockfile schema version
 // (lockfile.Version) is a separate data contract and stays 0.1.0.
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // NewRootCmd builds the hflock command tree.
 func NewRootCmd() *cobra.Command {
@@ -334,6 +335,12 @@ func buildTargets(spec, giteeBase, giteeToken, giteeUser, msBase, msToken, workD
 	for _, name := range strings.Split(spec, ",") {
 		switch strings.TrimSpace(name) {
 		case "gitee-ai":
+			// Fail before any download starts: on a git-less machine the
+			// upload-side check would otherwise surface only after the full
+			// (possibly multi-GB) weight download.
+			if _, err := exec.LookPath("git"); err != nil {
+				return nil, fmt.Errorf("gitee-ai: git not found in PATH — git push is the platform's documented upload mechanism (https://ai.gitee.com/docs/products/models/upload)")
+			}
 			g := &mirror.GiteeTarget{Base: giteeBase, Token: giteeToken, User: giteeUser}
 			if workDir != "" {
 				g.CloneRoot = filepath.Join(workDir, "gitee-ai")
@@ -381,13 +388,18 @@ unverified (list never fails on a missing manifest).`,
 				mirrors []string
 				seen    bool
 			}
+			// Keyed by repo@revision — the same convention verify --check
+			// diffs on. Keying by repo alone would merge two weights pinning
+			// different revisions of one repo, and let a manifest still
+			// holding the old revision's entries mark a new revision verified.
 			byRepo := map[string]*status{}
 			if manifest != nil {
 				for _, e := range manifest.Entries {
-					st := byRepo[e.Repo]
+					key := e.Repo + "@" + e.Revision
+					st := byRepo[key]
 					if st == nil {
 						st = &status{}
-						byRepo[e.Repo] = st
+						byRepo[key] = st
 					}
 					st.hashed++
 					st.seen = true
@@ -402,7 +414,7 @@ unverified (list never fails on a missing manifest).`,
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 2, 2, ' ', 0)
 			fmt.Fprintln(w, "REPO\tREVISION\tPINS\tHASHED\tMIRRORS\tSTATUS")
 			for _, weight := range lock.Weights {
-				st := byRepo[weight.Repo]
+				st := byRepo[weight.Repo+"@"+weight.Revision]
 				hashed, mirrors, state := "-", "-", "unverified"
 				if st != nil && st.seen {
 					hashed = strconv.Itoa(st.hashed)

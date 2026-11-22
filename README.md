@@ -30,7 +30,7 @@ hflock 读取 YAML 中的仓库、版本和文件列表，下载文件，生成�
   <img src="./assets/presentation/architecture-light.svg" width="960" alt="Architecture diagram">
 </picture>
 
-锁文件加载器校验请求；Hugging Face 源解析文件名或 glob，将下载流同时写入本地缓存并计算 SHA256。验证器把仓库、版本、路径、大小和摘要写入清单；它不会自动将摘要与可信基线比较。
+锁文件加载器校验请求；Hugging Face 源解析文件名或 glob，将下载流同时写入本地缓存并计算 SHA256。验证器把仓库、版本、路径、大小和摘要写入清单；`verify --check` 把新一次运行与你自己保存的基线清单逐条比对，作为 CI 气隙门禁，并拒绝把基线写成本次输出（`--check` 与 `--manifest` 必须是不同文件）。
 
 | 组件 | 职责 |
 | --- | --- |
@@ -97,8 +97,9 @@ hflock init deepseek-ai/DeepSeek-V3 --revision v3.0
 # 下载 + 哈希 + 镜像上传（Gitee AI + ModelScope；令牌经环境变量或 flag）
 HFLOCK_GITEE_TOKEN=… HFLOCK_MODELSCOPE_TOKEN=… hflock sync weights.lock.yaml
 
-# 重新下载并哈希，与可信基线清单比对（CI 气隙门禁：任何差异退出码 1）
-hflock verify weights.lock.yaml --check weights.lock.manifest.json
+# 重新下载并哈希，与可信基线清单比对（CI 气隙门禁：任何差异退出码 1；
+# --check 与 --manifest 必须是不同文件，本次输出不会覆盖基线）
+hflock verify weights.lock.yaml --manifest build/manifest.json --check weights.lock.manifest.json
 
 # 查看每个 pin 的镜像与哈希状态
 hflock list weights.lock.yaml
@@ -112,7 +113,7 @@ go run ./cmd/hflock verify examples/weights.lock.yaml --manifest weights.lock.ma
 
 ## 配置
 
---hf-base 或 HFLOCK_HF_BASE 指定 HTTP 源；--workdir 或 HFLOCK_WORKDIR 指定下载缓存；--manifest/-m 指定输出文件；--progress 显示进度。sync 额外支持：--mirrors 选择上传目标（默认 gitee-ai,modelscope）、--concurrency 并行下载数、HFLOCK_GITEE_TOKEN / HFLOCK_MODELSCOPE_TOKEN 上传令牌、HFLOCK_GITEE_USER git https 用户名（默认 oauth2）。示例启动 loopback fixture 服务并使用临时缓存。
+--hf-base 或 HFLOCK_HF_BASE 指定 HTTP 源；--workdir 或 HFLOCK_WORKDIR 指定下载缓存；--manifest/-m 指定输出文件（与 --check 必须是不同文件）；--progress 显示进度。sync 额外支持：--mirrors 选择上传目标（默认 gitee-ai,modelscope）、--concurrency 并行下载数、HFLOCK_GITEE_TOKEN / HFLOCK_MODELSCOPE_TOKEN 上传令牌、HFLOCK_GITEE_USER git https 用户名（默认 oauth2）。示例启动 loopback fixture 服务并使用临时缓存。
 
 ## 集成与职责分工
 
@@ -138,8 +139,9 @@ go run ./cmd/hflock verify examples/weights.lock.yaml --manifest weights.lock.ma
 
 - 示例计算九个小型元数据 fixture 的哈希，不是生产权重；真实镜像上传需要各平台令牌。
 - sync 已实现镜像上传：ModelScope 走其 REST API（建仓、LFS batch、预签名 PUT、commit）；Gitee AI 无 REST 上传接口，按其官方文档走 git push 流程——Gitee AI 上的大文件 LFS 推送需要操作者自行配置 gai / git-lfs。
-- 每次运行重新处理整个 pin 集，不做增量/差量同步；断点续传针对单个文件（Range 请求）。
-- 新计算的摘要记录收到的字节，不证明上游真实性；--check 只与你自己保存的基线清单比对。需要复现时应使用不可变版本。
+- 每次运行重新处理整个 pin 集，不做增量/差量同步；断点续传针对单个文件（Range 请求）。同一个 repo@revision 下的同一文件被多个 pin 覆盖时只下载一次、清单里也只记一条。
+- init 会按它写入的 revision 展开并校验 pin 集：glob 没有匹配任何文件时在 init 阶段就失败，而不是留下一个等到 verify/sync 才报错的锁文件。
+- 新计算的摘要记录收到的字节，不证明上游真实性；--check 只与你自己保留的基线清单比对。--check 与 --manifest 指向同一文件时会被拒绝——本次输出绝不会覆盖基线。需要复现时应使用不可变版本。
 
 镜像更多平台、差量同步、签名（PGP/sigstore）溯源是后续工作。
 

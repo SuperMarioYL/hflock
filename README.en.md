@@ -30,7 +30,7 @@ A model download is hard to reproduce when the chosen revision and exact bytes a
   <img src="./assets/presentation/architecture-light.svg" width="960" alt="Architecture diagram">
 </picture>
 
-The lockfile loader validates the request. The Hugging Face source resolves explicit filenames or globs and streams downloads through a SHA256 hasher into a local cache. The verifier writes repository, revision, path, size and digest to the manifest. It does not compare that digest with a trusted baseline.
+The lockfile loader validates the request. The Hugging Face source resolves explicit filenames or globs and streams downloads through a SHA256 hasher into a local cache. The verifier writes repository, revision, path, size and digest to the manifest; `verify --check` diffs a fresh run against a baseline manifest you retain (the CI air-gap gate) and refuses to write its own output over that baseline — `--check` and `--manifest` must name different files.
 
 | Component | Responsibility |
 | --- | --- |
@@ -99,8 +99,9 @@ hflock init deepseek-ai/DeepSeek-V3 --revision v3.0
 HFLOCK_GITEE_TOKEN=… HFLOCK_MODELSCOPE_TOKEN=… hflock sync weights.lock.yaml
 
 # Re-download and hash, diffing against a trusted baseline manifest
-# (the CI air-gap gate: any difference exits 1)
-hflock verify weights.lock.yaml --check weights.lock.manifest.json
+# (the CI air-gap gate: any difference exits 1; --check and --manifest must
+# name different files, so the fresh output never overwrites the baseline)
+hflock verify weights.lock.yaml --manifest build/manifest.json --check weights.lock.manifest.json
 
 # Show per-weight mirror and hash status
 hflock list weights.lock.yaml
@@ -114,7 +115,7 @@ go run ./cmd/hflock verify examples/weights.lock.yaml --manifest weights.lock.ma
 
 ## Configuration
 
---hf-base or HFLOCK_HF_BASE selects the HTTP source. --workdir or HFLOCK_WORKDIR selects the download cache. --manifest/-m selects the output file; --progress enables per-file progress. sync additionally supports --mirrors (upload targets, default gitee-ai,modelscope), --concurrency (parallel downloads), HFLOCK_GITEE_TOKEN / HFLOCK_MODELSCOPE_TOKEN upload tokens, and HFLOCK_GITEE_USER (git https username, default oauth2). The example starts a loopback fixture server and uses a temporary cache.
+--hf-base or HFLOCK_HF_BASE selects the HTTP source. --workdir or HFLOCK_WORKDIR selects the download cache. --manifest/-m selects the output file (it must differ from --check); --progress enables per-file progress. sync additionally supports --mirrors (upload targets, default gitee-ai,modelscope), --concurrency (parallel downloads), HFLOCK_GITEE_TOKEN / HFLOCK_MODELSCOPE_TOKEN upload tokens, and HFLOCK_GITEE_USER (git https username, default oauth2). The example starts a loopback fixture server and uses a temporary cache.
 
 ## Integrations and responsibilities
 
@@ -140,8 +141,9 @@ The following routes are implemented in the source. Choose the input that matche
 
 - The demo hashes nine small metadata fixtures, not production weights; real mirror uploads need platform tokens.
 - Mirror upload ships in sync: ModelScope via its REST API (repo ensure, LFS batch, presigned PUT, commit); Gitee AI has no REST upload API, so hflock drives the git push flow from its official docs — large LFS pushes there require the operator's own gai / git-lfs setup.
-- Every run re-processes the full pin set (no delta sync); resume is per file (Range requests).
-- A newly computed digest records received bytes; it does not establish upstream authenticity — --check only diffs against a baseline manifest you retain. Use immutable revisions when reproducibility matters.
+- Every run re-processes the full pin set (no delta sync); resume is per file (Range requests). A file covered by more than one pin is downloaded once and recorded once.
+- init expands and validates the pin set at the revision it writes: a glob that matches no files fails at init instead of leaving a lockfile that only fails in the next verify/sync run.
+- A newly computed digest records received bytes; it does not establish upstream authenticity — --check only diffs against a baseline manifest you retain. When --check and --manifest name the same file the run is refused, so the fresh output can never overwrite the baseline. Use immutable revisions when reproducibility matters.
 
 More mirror platforms, delta sync, and signed (PGP/sigstore) provenance are future work.
 

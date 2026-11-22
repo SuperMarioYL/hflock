@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -69,7 +70,9 @@ func initFixture(t *testing.T, tree string) string {
 	mux.HandleFunc("/api/models/o/r/revision/main", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"sha":"abc123def456"}`)
 	})
-	mux.HandleFunc("/api/models/o/r/tree/main", func(w http.ResponseWriter, r *http.Request) {
+	// the tree is served for any revision: init enumerates at the revision it
+	// pins (the resolved sha), not only at the ref the flag named
+	mux.HandleFunc("/api/models/o/r/tree/", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, tree)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -235,15 +238,23 @@ weights:
 	fresh := filepath.Join(work, "fresh.json")
 	baseline := filepath.Join(work, "baseline.json")
 
-	// a baseline that matches the fixture: check passes
+	// a baseline that matches the fixture: check passes. The baseline must be a
+	// distinct file: --check never reads back the file its own run writes.
 	root := NewRootCmd()
 	root.SetArgs([]string{"verify", lockPath, "--hf-base", hf, "--workdir", work, "--manifest", fresh})
 	if err := root.Execute(); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
+	freshBytes, err := os.ReadFile(fresh)
+	if err != nil {
+		t.Fatalf("read fresh manifest: %v", err)
+	}
+	if err := os.WriteFile(baseline, freshBytes, 0o644); err != nil {
+		t.Fatalf("write baseline: %v", err)
+	}
 	root = NewRootCmd()
 	root.SetArgs([]string{"verify", lockPath, "--hf-base", hf, "--workdir", work,
-		"--manifest", fresh, "--check", fresh})
+		"--manifest", fresh, "--check", baseline})
 	if err := root.Execute(); err != nil {
 		t.Fatalf("check against an identical baseline must pass: %v", err)
 	}
@@ -471,5 +482,79 @@ func TestBuildTargets_GiteeRequiresGitUpFront(t *testing.T) {
 		if len(targets) != 1 || targets[0].Name() != "gitee-ai" {
 			t.Fatalf("targets = %v", targets)
 		}
+	}
+}
+
+// Regression test for the v0.3.0 gate defect: --manifest defaults to
+// weights.lock.manifest.json and verify wrote the fresh manifest there before
+// reading --check, so the documented invocation
+// (`verify weights.lock.yaml --check weights.lock.manifest.json`) diffs the
+// fresh manifest against itself — the gate always passed — and the committed
+// baseline was overwritten by untrusted bytes.
+func TestVerifyCmd_CheckBaselineNotClobbered(t *testing.T) {
+	hf := fakeHF(t, "FRESH-BYTES")
+	dir := t.TempDir()
+	// the default --manifest path is resolved against the working directory,
+	// exactly as it is for an operator running from the repo root
+	t.Chdir(dir)
+
+	lockPath := filepath.Join(dir, "weights.lock.yaml")
+	if err := os.WriteFile(lockPath, []byte(`version: "0.1.0"
+weights:
+  - repo: o/r
+    revision: main
+    files: ["config.json"]
+`), 0o644); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+
+	// a tampered baseline living at the documented --check path
+	baselinePath := filepath.Join(dir, "weights.lock.manifest.json")
+	tampered := lockfile.HashManifest{LockVersion: lockfile.Version, Entries: []lockfile.HashEntry{
+		{Repo: "o/r", Revision: "main", File: "config.json", SHA256: strings.Repeat("0", 64), Size: 11},
+	}}
+	if err := lockfile.WriteManifest(baselinePath, &tampered); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(baselinePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root := NewRootCmd()
+	root.SetArgs([]string{
+		"verify", lockPath,
+		"--hf-base", hf,
+		"--workdir", filepath.Join(dir, "cache"),
+		"--check", "weights.lock.manifest.json",
+	})
+	err = root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "same file") {
+		t.Fatalf("err = %v, want a --check/--manifest collision error", err)
+	}
+	after, readErr := os.ReadFile(baselinePath)
+	if readErr != nil {
+		t.Fatalf("baseline unreadable after the run: %v", readErr)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("the trusted baseline was overwritten by the fresh manifest")
+	}
+}
+
+// Regression test for the v0.3.0 init gap: --files stored patterns verbatim,
+// so a typo'd glob was committed as a lockfile that only failed in the next
+// verify/sync run with "matched no files".
+func TestInitCmd_RejectsUnmatchedPins(t *testing.T) {
+	base := initFixture(t, `[{"type":"file","path":"config.json","size":2}]`)
+	out := filepath.Join(t.TempDir(), "weights.lock.yaml")
+
+	root := NewRootCmd()
+	root.SetArgs([]string{"init", "o/r", "--hf-base", base, "--out", out, "--files", "*.safetensors"})
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "matched no files") {
+		t.Fatalf("err = %v, want 'matched no files'", err)
+	}
+	if _, statErr := os.Stat(out); statErr == nil {
+		t.Fatalf("init wrote a lockfile pinning nothing")
 	}
 }

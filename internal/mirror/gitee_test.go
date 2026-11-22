@@ -134,7 +134,7 @@ func TestGitee_StaleCloneDirRecovered(t *testing.T) {
 	g := &GiteeTarget{Base: base, CloneRoot: cloneRoot}
 
 	// simulate the killed first clone: a directory with junk, no .git
-	stale := filepath.Join(cloneRoot, "o_r")
+	stale := filepath.Join(cloneRoot, "o", "r")
 	if err := os.MkdirAll(stale, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -177,5 +177,63 @@ func TestGitee_UnsafeRepoIdRejected(t *testing.T) {
 	// nothing outside the clone root was touched
 	if _, err := os.Stat(g.cloneRoot()); err != nil {
 		t.Fatalf("clone root disturbed: %v", err)
+	}
+}
+
+// Regression test for the v0.3.0 clone-dir flattening: sanitizeRepo mapped the
+// whole repo id to one name, so "o/a_b" and "o_a/b" shared a clone directory.
+// The second upload reused the first repo's clone (origin = the first mirror)
+// and pushed its bytes there, publishing one repo's files under another's
+// mirror and reporting success.
+func TestGitee_CloneDirSeparatesCollidingRepos(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not in PATH")
+	}
+	base := t.TempDir()
+	const repoA, repoB = "o/a_b", "o_a/b"
+	for _, repo := range []string{repoA, repoB} {
+		bare := filepath.Join(base, repo+".git")
+		if err := os.MkdirAll(filepath.Dir(bare), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		runGit(t, base, "init", "--bare", bare)
+	}
+	g := &GiteeTarget{Base: base, CloneRoot: filepath.Join(t.TempDir(), "clones")}
+	fileA := writeFileT(t, filepath.Join(t.TempDir(), "a.txt"), "AAA")
+	fileB := writeFileT(t, filepath.Join(t.TempDir(), "b.txt"), "BBB")
+
+	if err := g.UploadRepo(context.Background(), repoA, "v1", map[string]string{"a.txt": fileA}); err != nil {
+		t.Fatalf("UploadRepo %s: %v", repoA, err)
+	}
+	if err := g.UploadRepo(context.Background(), repoB, "v1", map[string]string{"b.txt": fileB}); err != nil {
+		t.Fatalf("UploadRepo %s: %v", repoB, err)
+	}
+
+	// each mirror holds only its own repo's file
+	cases := []struct {
+		repo    string
+		want    string
+		content string
+		absent  string
+	}{
+		{repoA, "a.txt", "AAA", "b.txt"},
+		{repoB, "b.txt", "BBB", "a.txt"},
+	}
+	for _, c := range cases {
+		workspace := t.TempDir()
+		checkout := filepath.Join(workspace, "checkout")
+		runGit(t, workspace, "clone", filepath.Join(base, c.repo+".git"), checkout)
+		got, err := os.ReadFile(filepath.Join(checkout, c.want))
+		if err != nil || string(got) != c.content {
+			t.Fatalf("%s: %s = %q err %v", c.repo, c.want, got, err)
+		}
+		if _, err := os.Stat(filepath.Join(checkout, c.absent)); err == nil {
+			t.Fatalf("%s received %s from the other repo — the clones collided", c.repo, c.absent)
+		}
+		// exactly one upload landed in this mirror
+		count := strings.TrimSpace(runGit(t, workspace, "--git-dir", filepath.Join(base, c.repo+".git"), "rev-list", "--all", "--count"))
+		if count != "1" {
+			t.Fatalf("%s commits = %s, want 1", c.repo, count)
+		}
 	}
 }

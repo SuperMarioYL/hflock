@@ -156,21 +156,29 @@ func (g *GiteeTarget) cloneRoot() string {
 	return filepath.Join(os.TempDir(), "hflock-gitee")
 }
 
-// sanitizeRepo flattens path separators in a repo id so one repo can never
-// escape the clone root.
-func sanitizeRepo(repo string) string {
-	return strings.NewReplacer("/", "_", "\\", "_").Replace(repo)
+// sanitizeRepoAtom flattens path separators inside one atom of a repo id so a
+// separator can never survive into a directory name.
+func sanitizeRepoAtom(s string) string {
+	return strings.NewReplacer("/", "_", "\\", "_").Replace(s)
 }
 
-// cloneDirName maps a repo id to its clone directory name, refusing ids whose
-// sanitized form would land outside or on the clone root itself ("." and
-// ".." survive separator flattening and must never be removed or cloned into).
+// cloneDirName maps a repo id to its clone directory, relative to the clone
+// root, keeping the owner/name structure so two distinct repos can never share
+// one clone. Each atom is sanitized separately and "." / ".." atoms are refused,
+// so a repo id can never land outside the root. Flattening the whole id — the
+// previous behavior — mapped "o/a_b" and "o_a/b" onto one directory, so the
+// second upload reused the first repo's clone and pushed its files into the
+// first repo's mirror.
 func cloneDirName(repo string) (string, error) {
-	name := sanitizeRepo(repo)
-	if name == "" || name == "." || name == ".." {
-		return "", fmt.Errorf("gitee-ai: refusing unsafe repo id %q", repo)
+	var atoms []string
+	for _, part := range strings.Split(repo, "/") {
+		part = sanitizeRepoAtom(part)
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("gitee-ai: refusing unsafe repo id %q", repo)
+		}
+		atoms = append(atoms, part)
 	}
-	return name, nil
+	return filepath.Join(atoms...), nil
 }
 
 func copyFileToLocal(src, dst string) error {

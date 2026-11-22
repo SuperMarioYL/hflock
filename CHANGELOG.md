@@ -6,6 +6,34 @@ All notable changes to hflock are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-23
+
+### Fixed
+
+- `hflock verify --check` no longer reads its baseline from the file the same
+  run writes. With the documented flags (`--check weights.lock.manifest.json`
+  and no `--manifest`) the fresh manifest overwrote the baseline and was then
+  diffed against itself, so the CI gate always passed and the trusted record
+  was destroyed. The baseline is now read before the fresh manifest is written,
+  and a `--check`/`--manifest` collision is refused with an error naming both
+  paths.
+- `hflock sync` fetches and records each file once per (repo, revision, file)
+  identity. Two pins covering the same file used to download it twice — in
+  parallel, into one cache file — and wrote duplicate manifest rows.
+- Gitee AI clones keep the owner/name layout instead of flattening the repo id.
+  Two repos whose flattened names collided (`o/a_b` and `o_a/b`) shared a clone
+  directory, so the second upload pushed its files into the first repo's mirror
+  and reported success.
+- `hflock init` validates the pin set at the revision it pins: a glob that
+  matches nothing now fails at init instead of producing a lockfile that only
+  fails in the next verify/sync run, and the file lists are enumerated at the
+  resolved commit rather than the moving ref.
+
+### Changed
+
+- The READMEs no longer claim that verify never diffs a baseline; both locales
+  describe the shipped `--check` contract, including the never-overwrite rule.
+
 ## [0.3.0] - 2026-10-20
 
 ### Fixed
@@ -69,7 +97,8 @@ All notable changes to hflock are documented here. The format follows
   verifier: `hflock verify` downloads pinned weights from Hugging Face and
   emits `weights.lock.manifest.json`.
 
-[Unreleased]: https://github.com/SuperMarioYL/hflock/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/SuperMarioYL/hflock/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/SuperMarioYL/hflock/releases/tag/v0.4.0
 [0.3.0]: https://github.com/SuperMarioYL/hflock/releases/tag/v0.3.0
 [0.2.0]: https://github.com/SuperMarioYL/hflock/releases/tag/v0.2.0
 [0.1.0]: https://github.com/SuperMarioYL/hflock/releases/tag/v0.1.0

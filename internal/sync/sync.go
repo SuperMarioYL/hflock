@@ -23,16 +23,20 @@ type Runner struct {
 	Concurrency int    // parallel downloads; default 4
 }
 
-type syncJob struct {
-	weightIdx int
-	file      string
+// fileKey is one physical pinned file. The cache path, the manifest key and the
+// --check diff all key on this triple, so downloads and manifest rows must too:
+// two pins that cover the same file are one physical record, not two.
+type fileKey struct {
+	repo     string
+	revision string
+	file     string
 }
 
 // Run mirrors the lockfile's pinned weights and writes the manifest to
 // outPath, returning it on success. Every file is downloaded into the cache
 // (resuming any partial previous download), each weight's files are uploaded
-// to every target as one batch, and the manifest records each entry's
-// mirrors.
+// to every target as one batch, and the manifest records each file once with
+// the mirrors that hold it.
 func (r *Runner) Run(ctx context.Context, lock *lockfile.WeightLock, outPath string) (*lockfile.HashManifest, error) {
 	if lock == nil {
 		return nil, fmt.Errorf("sync: nil lockfile")
@@ -42,9 +46,12 @@ func (r *Runner) Run(ctx context.Context, lock *lockfile.WeightLock, outPath str
 	}
 
 	// Expand every pin to its concrete file list (globs included; a pattern
-	// matching nothing is an error, same contract as verify).
-	var jobs []syncJob
+	// matching nothing is an error, same contract as verify), then dedupe the
+	// download set by physical identity. Without the dedupe, a file covered by
+	// two pins would be fetched twice — concurrently, into the same cache file.
+	var jobs []fileKey
 	filesByWeight := make([][]string, len(lock.Weights))
+	queued := make(map[fileKey]bool)
 	for i, w := range lock.Weights {
 		files, err := r.Source.ListFiles(ctx, w.Repo, w.Revision, w.Files)
 		if err != nil {
@@ -52,7 +59,12 @@ func (r *Runner) Run(ctx context.Context, lock *lockfile.WeightLock, outPath str
 		}
 		filesByWeight[i] = files
 		for _, f := range files {
-			jobs = append(jobs, syncJob{weightIdx: i, file: f})
+			k := fileKey{repo: w.Repo, revision: w.Revision, file: f}
+			if queued[k] {
+				continue
+			}
+			queued[k] = true
+			jobs = append(jobs, k)
 		}
 	}
 
@@ -77,9 +89,9 @@ func (r *Runner) Run(ctx context.Context, lock *lockfile.WeightLock, outPath str
 			cancel()
 		}
 	}
-	for i, j := range jobs {
+	for i, k := range jobs {
 		wg.Add(1)
-		go func() {
+		go func(i int, k fileKey) {
 			defer wg.Done()
 			select {
 			case sem <- struct{}{}:
@@ -87,40 +99,50 @@ func (r *Runner) Run(ctx context.Context, lock *lockfile.WeightLock, outPath str
 				return
 			}
 			defer func() { <-sem }()
-			w := lock.Weights[j.weightIdx]
-			res, err := verify.Fetch(runCtx, r.Source, r.WorkDir, w.Repo, w.Revision, j.file, true)
+			res, err := verify.Fetch(runCtx, r.Source, r.WorkDir, k.repo, k.revision, k.file, true)
 			if err != nil {
-				fail(fmt.Errorf("fetch %s@%s/%s: %w", w.Repo, w.Revision, j.file, err))
+				fail(fmt.Errorf("fetch %s@%s/%s: %w", k.repo, k.revision, k.file, err))
 				return
 			}
-			mu.Lock()
 			results[i] = res
-			mu.Unlock()
-		}()
+		}(i, k)
 	}
 	wg.Wait()
 	if firstErr != nil {
 		return nil, firstErr
 	}
 
-	// Upload each weight's files to every target as one batch.
-	cachePaths := make([]map[string]string, len(lock.Weights))
-	for i := range cachePaths {
-		cachePaths[i] = make(map[string]string)
+	// Upload each weight's files to every target as one batch. The same
+	// physical file can be part of more than one weight's batch; the mirror is
+	// idempotent, and the manifest row records the mirrors once.
+	resultByFile := make(map[fileKey]verify.Result, len(jobs))
+	for i, k := range jobs {
+		resultByFile[k] = results[i]
 	}
-	for i, j := range jobs {
-		cachePaths[j.weightIdx][j.file] = results[i].Path
-	}
-	mirrorIDs := make([][]string, len(lock.Weights))
+	mirrorsFor := make(map[fileKey][]string, len(jobs))
 	for i, w := range lock.Weights {
-		if len(cachePaths[i]) == 0 {
+		if len(filesByWeight[i]) == 0 {
 			continue
 		}
+		cachePaths := make(map[string]string, len(filesByWeight[i]))
+		for _, f := range filesByWeight[i] {
+			k := fileKey{repo: w.Repo, revision: w.Revision, file: f}
+			cachePaths[f] = resultByFile[k].Path
+		}
+		var ids []string
 		for _, t := range r.Targets {
-			if err := t.UploadRepo(ctx, w.Repo, w.Revision, cachePaths[i]); err != nil {
+			if err := t.UploadRepo(ctx, w.Repo, w.Revision, cachePaths); err != nil {
 				return nil, fmt.Errorf("upload %s to %s: %w", w.Repo, t.Name(), err)
 			}
-			mirrorIDs[i] = append(mirrorIDs[i], t.MirrorID(w.Repo))
+			ids = append(ids, t.MirrorID(w.Repo))
+		}
+		// every weight is uploaded to the same target set, so the first weight
+		// that covers a file supplies its mirror list
+		for _, f := range filesByWeight[i] {
+			k := fileKey{repo: w.Repo, revision: w.Revision, file: f}
+			if _, ok := mirrorsFor[k]; !ok {
+				mirrorsFor[k] = ids
+			}
 		}
 	}
 
@@ -128,15 +150,15 @@ func (r *Runner) Run(ctx context.Context, lock *lockfile.WeightLock, outPath str
 		LockVersion: lock.Version,
 		GeneratedAt: time.Now().UTC(),
 	}
-	for i, j := range jobs {
-		w := lock.Weights[j.weightIdx]
+	for _, k := range jobs {
+		res := resultByFile[k]
 		m.Entries = append(m.Entries, lockfile.HashEntry{
-			Repo:     w.Repo,
-			Revision: w.Revision,
-			File:     j.file,
-			SHA256:   results[i].SHA256,
-			Size:     results[i].Size,
-			Mirrors:  mirrorIDs[j.weightIdx],
+			Repo:     k.repo,
+			Revision: k.revision,
+			File:     k.file,
+			SHA256:   res.SHA256,
+			Size:     res.Size,
+			Mirrors:  mirrorsFor[k],
 		})
 	}
 	if err := lockfile.WriteManifest(outPath, m); err != nil {

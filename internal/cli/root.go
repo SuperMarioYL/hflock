@@ -34,7 +34,7 @@ const (
 // Version is the hflock tool version, kept in lockstep with the VERSION file
 // and CHANGELOG.md (asserted by version_test.go). The lockfile schema version
 // (lockfile.Version) is a separate data contract and stays 0.1.0.
-const Version = "0.3.0"
+const Version = "0.4.0"
 
 // NewRootCmd builds the hflock command tree.
 func NewRootCmd() *cobra.Command {
@@ -109,6 +109,21 @@ the run only records.`,
 			if manifestPath == "" {
 				manifestPath = "weights.lock.manifest.json"
 			}
+			// Read the baseline BEFORE the fresh manifest is written. With the
+			// default flags --check and --manifest name the same file, and
+			// writing first would let the gate diff the fresh manifest against
+			// itself while destroying the trusted record.
+			var baseline *lockfile.HashManifest
+			if checkPath != "" {
+				if samePath(manifestPath, checkPath) {
+					return fmt.Errorf("--check %s and --manifest %s are the same file: that would compare the fresh manifest with itself and overwrite the baseline (pass a distinct --manifest)", checkPath, manifestPath)
+				}
+				var err error
+				baseline, err = lockfile.ReadManifest(checkPath)
+				if err != nil {
+					return fmt.Errorf("read baseline: %w", err)
+				}
+			}
 			m, err := v.Verify(context.Background(), lock, manifestPath)
 			if err != nil {
 				return err
@@ -118,10 +133,6 @@ the run only records.`,
 
 			if checkPath == "" {
 				return nil
-			}
-			baseline, err := lockfile.ReadManifest(checkPath)
-			if err != nil {
-				return fmt.Errorf("read baseline: %w", err)
 			}
 			diffs := verify.CheckManifest(baseline, m)
 			if len(diffs) > 0 {
@@ -180,14 +191,19 @@ globs, --all pins every file in the repo.`,
 			}
 
 			var files []string
+			// Enumerate and validate the pin set at the revision the lockfile
+			// records (the resolved sha), not at the ref the flag named, and let
+			// ListFiles reject a pattern that matches nothing — the same contract
+			// verify and sync enforce. A typo'd glob then fails here, where it is
+			// written, instead of in the next CI run.
 			switch {
 			case all:
-				tree, err := src.ListAll(context.Background(), repo, revision)
+				tree, err := src.ListAll(context.Background(), repo, rev)
 				if err != nil {
-					return fmt.Errorf("list %s@%s: %w", repo, revision, err)
+					return fmt.Errorf("list %s@%s: %w", repo, rev, err)
 				}
 				if len(tree) == 0 {
-					return fmt.Errorf("repo %s@%s has no files to pin", repo, revision)
+					return fmt.Errorf("repo %s@%s has no files to pin", repo, rev)
 				}
 				files = tree
 			case filesFlag != "":
@@ -199,10 +215,13 @@ globs, --all pins every file in the repo.`,
 				if len(files) == 0 {
 					return fmt.Errorf("--files named no files")
 				}
+				if _, err := src.ListFiles(context.Background(), repo, rev, files); err != nil {
+					return fmt.Errorf("pin %s@%s: %w", repo, rev, err)
+				}
 			default:
-				tree, err := src.ListAll(context.Background(), repo, revision)
+				tree, err := src.ListAll(context.Background(), repo, rev)
 				if err != nil {
-					return fmt.Errorf("list %s@%s: %w", repo, revision, err)
+					return fmt.Errorf("list %s@%s: %w", repo, rev, err)
 				}
 				present := make(map[string]bool, len(tree))
 				for _, f := range tree {
@@ -440,4 +459,22 @@ func containsStr(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// samePath reports whether two path flags name the same file. Relative paths
+// are resolved from the process working directory — the frame of reference the
+// CLI's defaults use — and an existing pair is also compared by inode, so a
+// symlink or a differently spelled path cannot slip past the check.
+func samePath(a, b string) bool {
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	if errA != nil || errB != nil {
+		return a == b
+	}
+	if absA == absB {
+		return true
+	}
+	sa, errA := os.Stat(absA)
+	sb, errB := os.Stat(absB)
+	return errA == nil && errB == nil && os.SameFile(sa, sb)
 }

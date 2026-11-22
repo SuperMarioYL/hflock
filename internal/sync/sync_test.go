@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/SuperMarioYL/hflock/internal/lockfile"
@@ -288,5 +289,54 @@ func TestSyncRun_CachePathCollisionUploadsCorrectBytes(t *testing.T) {
 	}
 	if got := string(rec.got["o/r/sub_model.bin"]); got != flatContent {
 		t.Fatalf("mirror received wrong bytes for sub_model.bin: %q", got)
+	}
+}
+
+// Regression test for the v0.3.0 duplicate-identity defect: sync built one job
+// per (weight, expanded file) with no dedupe, so a file covered by two pins was
+// downloaded twice — concurrently when the limit allowed — into one cache path,
+// and the manifest recorded the same physical file twice.
+func TestSyncRun_DedupesSharedFileIdentity(t *testing.T) {
+	var downloads atomic.Int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/models/", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/tree/") {
+			http.NotFound(w, r)
+			return
+		}
+		io.WriteString(w, `[{"type":"file","path":"config.json","size":5},`+
+			`{"type":"file","path":"generation_config.json","size":5}]`)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		downloads.Add(1)
+		io.WriteString(w, "BYTES")
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	// two pins over one repo@revision: the glob already covers config.json
+	lock := &lockfile.WeightLock{Version: lockfile.Version, Weights: []lockfile.PinnedWeight{
+		{Repo: "o/r", Revision: "main", Files: []string{"*.json"}},
+		{Repo: "o/r", Revision: "main", Files: []string{"config.json"}},
+	}}
+	work := t.TempDir()
+	r := Runner{Source: &mirror.HFSource{Base: srv.URL, Client: srv.Client()}, WorkDir: work, Concurrency: 2}
+	m, err := r.Run(context.Background(), lock, filepath.Join(work, "manifest.json"))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if n := downloads.Load(); n != 2 {
+		t.Fatalf("downloads = %d, want 2 (one per physical file, not one per pin)", n)
+	}
+	keys := map[string]bool{}
+	for _, e := range m.Entries {
+		k := e.Repo + "@" + e.Revision + "/" + e.File
+		if keys[k] {
+			t.Fatalf("duplicate manifest entry for one physical file: %s", k)
+		}
+		keys[k] = true
+	}
+	if len(m.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2 unique files", len(m.Entries))
 	}
 }
